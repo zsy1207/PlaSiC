@@ -100,6 +100,9 @@ extern int frames_enabled;
 extern plasic_stream_writer frame_writer;
 extern double integration_start_time;
 extern char runtime_error_message[512];
+/* The CLI reports errors from distributed ozone reads before the MPI finalization
+ * barrier. Callers of this internal entry point must finalize on failure. */
+int runtime_initialize_before_cleanup(const plasic_runtime_options *options);
 
 void runtime_set_error(const char *format, ...);
 int runtime_broadcast_status(int status);

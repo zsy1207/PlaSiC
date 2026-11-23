@@ -61,7 +61,7 @@ static int radiation_step(void)
         distance_factor, plasic_sid, plasic_cola,
         radiation.cosine_zenith,
         &radiation.sun_distance_factor);
-    if (radiation.ozone_mode == 1)
+    if (radiation.use_synthetic_ozone == 1)
     {
         status = rad_synthetic_ozone(
             PLASIC_NLON, PLASIC_NLPP, PLASIC_NLEV, calendar_day,
@@ -548,6 +548,11 @@ static int ocean3d_exchange_halo(float *field, int32_t levels)
 {
     const int32_t nlon = PLASIC_NLON;
     const int32_t rows = PLASIC_NLPP;
+    /* Each level contributes one row to the MPI element count. */
+    if (levels < 1 || levels > INT32_MAX / nlon)
+    {
+        return -1;
+    }
     const int32_t elements = nlon * levels;
     const size_t bytes = (size_t)elements * sizeof(float);
     float *send_north = (float *)malloc(bytes);
