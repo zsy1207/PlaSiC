@@ -1,5 +1,6 @@
 """Validate complete experiments and write annual global surface-air temperatures."""
 import csv
+import json
 import sys
 from pathlib import Path
 
@@ -62,10 +63,26 @@ def main():
         series[case] = values
         print(f'{case}: min={values.min():.6f}, max={values.max():.6f}, NaN fraction={np.isnan(values).mean():.3f}, units=K')
     OUTPUT.mkdir(parents=True, exist_ok=True)
+    anomalies = {c: v - v[(years >= 1850) & (years <= 1900)].mean() for c, v in series.items()}
+    summary = {
+        'temperature_variable': 'tas',
+        'units': 'K',
+        'anomaly_baseline': 'Each series uses its own 1850-1900 mean.',
+        'period': [int(years[0]), int(years[-1])],
+        'experiments': {
+            case: {
+                'years': len(years),
+                'baseline_1850_1900_K': float(values[years <= 1900].mean()),
+                'mean_anomaly_2005_2014_K': float(anomalies[case][years >= 2005].mean()),
+                'anomaly_2014_K': float(anomalies[case][-1]),
+                'temperature_2014_K': float(values[-1]),
+            } for case, values in series.items()
+        },
+    }
+    (OUTPUT / 'summary.json').write_text(json.dumps(summary, indent=2, allow_nan=False) + '\n')
     with (OUTPUT / 'annual_temperature.csv').open('w', newline='') as stream:
         writer = csv.writer(stream, lineterminator='\n')
         writer.writerow(['year', *[c + '_K' for c in CASES], *[c + '_anomaly_K' for c in CASES]])
-        anomalies = {c: v - v[(years >= 1850) & (years <= 1900)].mean() for c, v in series.items()}
         for i, year in enumerate(years):
             writer.writerow([year, *[series[c][i] for c in CASES], *[anomalies[c][i] for c in CASES]])
 

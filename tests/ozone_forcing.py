@@ -148,6 +148,9 @@ class MonthlyOzone(unittest.TestCase):
             ("gregorian", 1850, 31, (1, 2), 1850, 15.5 / 29.5),
             ("gregorian", 1850, 32, (1, 2), 1850, 16.5 / 29.5),
             ("gregorian", 1852, 60, (2, 3), 1852, 14.5 / 30),
+            # Day 60 is March 1 in 1900 and February 29 in 2000.
+            ("gregorian", 1900, 60, (2, 3), 1900, 15.0 / 29.5),
+            ("gregorian", 2000, 60, (2, 3), 2000, 14.5 / 30),
             ("360_day", 1851, 1, (12, 1), (1850, 1851), 16 / 30),
         ):
             with self.subTest(calendar=calendar, year=year, yday=yday):

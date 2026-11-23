@@ -50,7 +50,7 @@ class HistoricalAnalysis(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'complete calendar month'):
                 analysis.annual_temperature(path, 1850, 1850)
 
-    def test_forcing_contrasts_and_leap_days(self):
+    def test_forcing_contrasts_and_total_steps(self):
         for case in runner.CASES:
             cmd = runner.command(Path('/model'), Path('/ic'), Path('/o3'), Path('/output'), case)
             self.assertEqual(cmd[cmd.index('--steps')+1], '1928480')
@@ -60,6 +60,33 @@ class HistoricalAnalysis(unittest.TestCase):
         cmd = runner.command(Path('/model'), Path('/ic'), Path('/o3'), Path('/out'),
                              'co2_only', mpirun='srun -n 2')
         self.assertEqual(cmd[:4], ['srun', '-n', '2', '/model'])
+
+    def test_gregorian_centuries(self):
+        self.assertEqual(runner.year_start(1850), 21622368)
+        for year, feb_days in ((1900, 28), (2000, 29)):
+            with self.subTest(year=year):
+                self.assertEqual(runner.year_start(year + 1) - runner.year_start(year),
+                                 (337 + feb_days) * 32)
+                # Only February is warm, so using a 28-day February in 2000
+                # changes the annual mean by a measurable, known amount.
+                with tempfile.TemporaryDirectory() as tmp:
+                    path = Path(tmp) / 'tas.nc'
+                    dates = [datetime(year, m, 1) for m in range(1, 13)] + [datetime(year + 1, 1, 1)]
+                    with nc.Dataset(path, 'w') as ds:
+                        for name, size in [('time', 12), ('lat', 1), ('lon', 1), ('bnds', 2)]:
+                            ds.createDimension(name, size)
+                        ds.createVariable('lat', 'f8', ('lat',))[:] = 0.
+                        time = ds.createVariable('time', 'f8', ('time',))
+                        time.units, time.calendar, time.bounds = 'days since 1850-01-01', 'proleptic_gregorian', 'time_bnds'
+                        edges = nc.date2num(dates, time.units, time.calendar)
+                        time[:] = (edges[:-1] + edges[1:]) / 2
+                        ds.createVariable('time_bnds', 'f8', ('time', 'bnds'))[:] = np.column_stack((edges[:-1], edges[1:]))
+                        temp = ds.createVariable('tas', 'f8', ('time', 'lat', 'lon'))
+                        temp.units = 'K'
+                        temp[:] = 280.
+                        temp[1] = 290.
+                    result = analysis.annual_temperature(path, year, year)[1][0]
+                    self.assertAlmostEqual(result, 280 + 10 * feb_days / (337 + feb_days), places=11)
 
     def test_resume_requires_both_checkpoint_checksums(self):
         with tempfile.TemporaryDirectory() as tmp:

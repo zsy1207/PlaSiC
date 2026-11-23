@@ -27,15 +27,13 @@
  */
 #define PLASIC_DEFAULT_SURFACE_DATA "data/surface"
 
-/*
- * Print command-line usage.
- */
 static void report_initialization_error(const char *message)
 {
     fprintf(stderr, "PlaSiC initialization failed: %s\n", message);
     fflush(stderr);
 }
 
+/* Print command-line usage. */
 static void print_usage(FILE *stream, const char *program)
 {
     fprintf(stream,

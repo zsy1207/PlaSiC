@@ -1,3 +1,11 @@
+/*
+ * 外部臭氧按月提供在模式高斯网格与 sigma 层上。每个 MPI 进程仅读取本地纬度带。
+ * Monthly ozone is supplied on the native Gaussian and sigma grid. Each MPI
+ * rank reads its latitude slab and caches the two bracketing monthly fields.
+ * 辐射使用质量混合比（kg/kg），在相邻月的月中值之间线性插值。
+ * Radiation takes mass mixing ratios (kg/kg), linearly interpolated between
+ * monthly anchors. The first and last anchors extend to their calendar edges.
+ */
 #include "ozone_forcing.h"
 
 #include "runtime_internal.h"
@@ -6,7 +14,6 @@
 #include <float.h>
 #include <netcdf.h>
 
-/* Each rank reads its own latitude slab. The file stays open across months. */
 static struct
 {
     int file;

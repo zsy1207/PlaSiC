@@ -83,12 +83,13 @@ def regrid(values, pressure, bounds, lat, lon, interfaces, target_lat, target_lo
     edges = np.r_[0., cells[:, 1]]
     if np.any(np.diff(edges) <= 0):
         raise ValueError('source pressure cells must have positive thickness')
-    v = values[np.ix_(*orders)]
+    # Put the pressure and horizontal axes in increasing order for interpolation.
+    sorted_values = values[np.ix_(*orders)]
     x = np.r_[x[-1] - 360, x, x[0] + 360]
-    v = np.concatenate((v[..., -1:], v, v[..., :1]), axis=2)
+    wrapped = np.concatenate((sorted_values[..., -1:], sorted_values, sorted_values[..., :1]), axis=2)
     query = np.stack(np.meshgrid(np.clip(target_lat, y[0], y[-1]), np.asarray(target_lon) % 360,
                                  indexing='ij'), axis=-1)
-    horizontal = RegularGridInterpolator((y, x), v.transpose(1, 2, 0))(query).transpose(2, 0, 1)
+    horizontal = RegularGridInterpolator((y, x), wrapped.transpose(1, 2, 0))(query).transpose(2, 0, 1)
     totals = np.cumsum(horizontal * np.diff(edges)[:, None, None], axis=0)
     cumulative = np.concatenate((np.zeros_like(totals[:1]), totals), axis=0)
 

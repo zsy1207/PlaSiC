@@ -8,7 +8,6 @@ import sys
 from tempfile import mkdtemp
 import netCDF4 as nc
 import numpy as np
-from datetime import date
 import json
 import os
 from pathlib import Path
@@ -16,6 +15,7 @@ import shlex
 import subprocess
 import time
 
+STEPS_PER_DAY = 32
 DEFAULT_LAUNCHER = 'mpirun --bind-to none -np 2'
 CHECKPOINT_FILES = ('final.restart', 'monthly/tas.nc')
 ROOT = Path(__file__).resolve().parents[2]
@@ -29,7 +29,9 @@ from experiments.ozone_historical.fig1.compute_temperature import annual_tempera
 
 
 def year_start(year):
-    return 21622368 + (date(year, 1, 1) - date(1850, 1, 1)).days * 32
+    """Model step at 00:00 on January 1. PlaSiC counts Gregorian year zero."""
+    leap_days = (year + 3) // 4 - (year + 99) // 100 + (year + 399) // 400
+    return (365 * year + leap_days) * STEPS_PER_DAY
 
 
 def command(model, restart, ozone, directory, case, end_year=2014, mpirun=DEFAULT_LAUNCHER, first_year=1850):
@@ -71,6 +73,7 @@ def checkpoint_files(directory):
 
 
 def segment(args, case, year, inputs):
+    """Resume a verified year or publish a newly completed one with its restart."""
     case_dir = args.output / case
     case_dir.mkdir(exist_ok=True)
     if (case_dir / 'monthly').exists():
@@ -94,6 +97,7 @@ def segment(args, case, year, inputs):
             if digest(destination / name) != checksums[name]:
                 raise ValueError(f'{destination / name}: checksum changed')
         return
+    # The next year may consume this restart only after all monthly files pass validation.
     directory = Path(mkdtemp(prefix=f'.{year}-', dir=case_dir))
     (directory / 'monthly').mkdir()
     cmd = command(args.model, restart, ozone, directory, case, year, args.mpirun, year)
