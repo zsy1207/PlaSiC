@@ -8,7 +8,7 @@ Three experiments compare annual global near-surface air temperature under chang
 | Ozone only | Fixed at 284.316853 ppmv | Historical UReading monthly fields |
 | CO₂ only | Historical UoM monthly concentrations | Repeating external 1850 seasonal cycle |
 
-All three start from `icA.restart`, spun up with idealized ozone. The common switch to external ozone can cause adjustment. Each configuration has one member. Own-series baselines remove a mean offset, but do not identify forced trends separately from initial adjustment, model drift or internal variability. The three trajectories describe the model under these configurations.
+Fixed CO₂ is a single global concentration. Fixed ozone retains the latitude, longitude and monthly pattern of 1850. All three start from `icA.restart`, spun up with idealized ozone. The common switch to external ozone can cause adjustment. Each configuration has one member. Own-series baselines remove a mean offset, but do not identify forced trends separately from initial adjustment, model drift or internal variability. The three trajectories describe the model under these configurations.
 
 ## Forcing data
 
@@ -26,7 +26,17 @@ The default download and output directories are `experiments/ozone_historical/da
 
 The individual stages can also be run separately. The [converter](prepare_ozone.py) takes the four UReading files, `--reference-ps` and `--output`. Add `--fixed-1850` for the repeating seasonal cycle. The [experiment runner](run_experiments.py) accepts `--historical-ozone` and `--fixed-ozone`. The [temperature analysis](fig1/compute_temperature.py) and [plot](fig1/plot_temperature.py) read completed runs from `PLASIC_OZONE_RUNS`.
 
+For example, with the four archived inputs and the pressure reference in the default locations:
+
+```bash
+exp=experiments/ozone_historical
+python "$exp/prepare_ozone.py" "$exp"/data/vmro3_input4MIPs_ozone_CMIP_UReading-CCMI-1-0_gn_*.nc \
+  --reference-ps "$exp/data/reference/monthly/ps.nc" --output "$exp/data/ozone_historical.nc"
+```
+
 The launcher can be replaced in full, for example with `--mpirun 'srun -n 2'` under an appropriate Slurm allocation. Each case takes 1,928,480 steps. To exercise a short run with the experiment runner, set `--end-year 1850`. To continue it, rerun with the same input files and output directory. Each completed year is atomically published at `<case>/<year>/` with its restart, monthly NetCDF files and provenance manifest. The current format checks the SHA256 of the restart and every monthly output on resume. Older manifests verify the restart and temperature file. An incomplete or changed checkpoint stops the run.
+
+The converted files retain the integer year and month read by the model and add a CF time coordinate with monthly bounds, sigma layer bounds, the actual reference-pressure grid and source-code fingerprints. The pressure coordinate is `p = ptop + sigma × (ps − ptop)`, with `ptop = 0 Pa`. Older prepared files retain their original inputs and can still be used by the model.
 
 ## Forcing validation
 
@@ -62,10 +72,18 @@ These instantaneous differences cannot identify a tropospheric or stratospheric 
 
 ## Temperature analysis and validation
 
-Use the model’s near-surface air temperature (`tas`), Gaussian quadrature in latitude, equal longitude weights and actual calendar-month lengths. The CSV contains each annual mean in kelvin and its anomaly relative to that case's inclusive 1850–1900 mean. The figure shows annual values and a separate centred nine-year mean for each case. Means span 1854–2010 with no endpoint padding. Model diagnostics, the CSV and PNG/PDF are written under `$PLASIC_OZONE_RUNS`. The summary JSON records absolute 2014 temperature, the 1850–1900 mean and both 2014 and 2005–2014 anomalies for each case. Final results require 165 complete years from each case.
+Use the model’s near-surface air temperature (`tas`), Gaussian quadrature in latitude, equal longitude weights and actual calendar-month lengths. The CSV contains each annual mean in kelvin and its anomaly relative to that case's inclusive 1850–1900 mean. The figure shows annual values and a separate centred nine-year mean for each case. Means span 1854–2010 with no endpoint padding. Model diagnostics, the CSV and PNG/PDF are written under `$PLASIC_OZONE_RUNS`. The summary JSON records absolute 2014 temperature, the 1850–1900 mean and both 2014 and 2005–2014 anomalies for each case. The CSV also gives raw annual paired differences between the combined case and each single-forcing case. These are conditional comparisons between single trajectories. A common additive offset cancels, but nonlinear adjustment and internal variability may differ. With three cases the CO₂–ozone interaction is unidentifiable.
+
+For the archived atmospheric temperature field `ta`, the analysis averages the top layer (σ = 0 to 0.0766) south of 60°S over September–November. Gaussian latitude-band areas are clipped at 60°S and months are weighted by duration. The CSV gives annual spring values, and the summary compares 1960–1979, 1980–1999 and 2000–2014 and reports the 1980–2014 linear slope. This is a layer-mean temperature diagnostic for one model realization. The reference historical plotting code and these calculations agree on annual weighting and the full nine-year windows. [Reference plotting script](../historical_3d_500y/plots/plot_historical_surface_temperature.py)
+
+Final results require 165 complete years from each case.
 
 ```bash
 make -C src test-data test-ozone test-ozone-mpi
 ```
+
+To test the annual restart boundary, run `python experiments/ozone_historical/verify_restart.py` after completing the combined case through 1851. It replays both years continuously with the recorded inputs and checks every stored monthly array and the complete binary end restart against the two annual segments. Set `PLASIC_OZONE_RUNS` or pass `--output` to select the archive.
+
+New runs with prescribed ozone and active radiation also write `monthly/toz.nc`. An independent January 1850 replay checked all 992 instantaneous pressure and interpolated ozone fields and reproduced every stored grid-cell monthly column. The global mean was 288.1697 DU. It is the monthly mean of the stepwise layer-integrated ozone mass at the actual instantaneous surface pressure, expressed in DU. The archived historical integrations predate this diagnostic. Their pressure and temperature outputs and complete forcing inputs are retained. Computing an exact monthly column for those trajectories requires replay from a restart. A product of monthly means omits the covariance between pressure and interpolated ozone.
 
 For each model invocation with prescribed ozone, the first radiation step reports the area-weighted global ozone column in DU, calculated from the actual layer mass fractions and surface pressure. A quantitative test prescribes a field with a known 300 DU global mean under PlaSiC's STP density convention. In a matched two-rank replay, the first radiation step of 1850 reported 287.631 DU. An independent calculation from the same instantaneous pressure gave 287.630594 DU. The ozone-specific tests cover remapping and native-grid units, calendar edges, startup validation, two-rank error propagation and radiation responses. The general upstream `test-runtime` target in `f29ee8e` references a missing test script. GCC 14 also issues a pre-existing `-Wmaybe-uninitialized` warning in the ocean halo code under strict builds. The default model and ozone tests build without promoting that upstream warning to an error.

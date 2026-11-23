@@ -33,24 +33,27 @@ static void orbital_declination(
     *distance_factor = inverse_distance * inverse_distance;
 }
 
-/* Report the field passed to the first radiation calculation with the actual
- * surface pressure. Gaussian latitude weights sum to two globally. */
+/* Integrate with the same layer masses, gravity and ozone density as radiation.
+ * One Dobson unit is equivalent to 10 micrometres of ozone at STP. */
+double plasic_physics_ozone_column_du(size_t horizontal)
+{
+    double mixing_ratio = 0.0;
+    for (size_t k = 0; k < PLASIC_NLEV; ++k)
+        mixing_ratio += (double)plasic_dsigma[k] * radiation.ozone[k * PLASIC_NHOR + horizontal];
+    return mixing_ratio * plasic_dp[horizontal] / (plasic_ga * 2.14e-5);
+}
+
+/* Report the first radiation calculation. Gaussian weights sum to two globally. */
 static int report_external_ozone_column(void)
 {
-    double weighted_mass = 0.0;
+    double weighted_column = 0.0;
     float diagnostics[2] = {0.0f, 0.0f};
-    for (int k = 0; k < PLASIC_NLEV; ++k)
-    {
-        for (int h = 0; h < PLASIC_NHOR; ++h)
-        {
-            const double q = radiation.ozone[(size_t)k * PLASIC_NHOR + (size_t)h];
-            weighted_mass += plasic_gwd[h / PLASIC_NLON] * plasic_dp[h] * plasic_dsigma[k] * q;
-            if (q > 1e-4)
-                diagnostics[1] = 1.0f;
-        }
-    }
-    /* 1 DU is a 10 micrometre column of ozone at STP; PlaSiC uses 2.14 kg/m3. */
-    diagnostics[0] = (float)(weighted_mass / (2.0 * PLASIC_NLON * plasic_ga * 2.14e-5));
+    for (size_t h = 0; h < PLASIC_NHOR; ++h)
+        weighted_column += plasic_gwd[h / PLASIC_NLON] * plasic_physics_ozone_column_du(h);
+    for (size_t i = 0; i < (size_t)PLASIC_NLEV * PLASIC_NHOR; ++i)
+        if (radiation.ozone[i] > 1e-4)
+            diagnostics[1] = 1.0f;
+    diagnostics[0] = (float)(weighted_column / (2.0 * PLASIC_NLON));
     if (mp_allreduce_real(diagnostics, 2) != 0)
         return PLASIC_RUNTIME_NUMERICAL_FAILURE;
     if (mp_is_root())

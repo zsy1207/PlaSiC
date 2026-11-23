@@ -6,11 +6,13 @@ pressure climatology. It does not follow instantaneous surface-pressure changes.
 from __future__ import annotations
 
 import argparse
+from datetime import date
 import json
 import os
 from pathlib import Path
 import re
 import sys
+import subprocess
 from tempfile import TemporaryDirectory
 
 import netCDF4 as nc
@@ -102,6 +104,59 @@ def regrid(values, pressure, bounds, lat, lon, interfaces, target_lat, target_lo
     return np.diff(integral, axis=0) / np.diff(target, axis=0)
 
 
+def write_cf_grid(out, months, sigma, interfaces, lat, lon, reference_ps):
+    """Describe the source calendar months and the pressure grid used by the converter."""
+    out.Conventions = 'CF-1.10'
+    out.createDimension('bnds', 2)
+    for name, values, standard_name, units, axis in (
+        ('lev', sigma, 'atmosphere_sigma_coordinate', '1', 'Z'),
+        ('lat', lat, 'latitude', 'degrees_north', 'Y'),
+        ('lon', lon, 'longitude', 'degrees_east', 'X'),
+    ):
+        coordinate = out.createVariable(name, 'f8', (name,))
+        coordinate[:] = values
+        coordinate.setncatts(dict(standard_name=standard_name, units=units, axis=axis))
+    out['lev'].setncatts(dict(positive='down', bounds='lev_bnds', computed_standard_name='air_pressure',
+                             formula_terms='sigma: lev ps: ps ptop: ptop'))
+    bounds = out.createVariable('lev_bnds', 'f8', ('lev', 'bnds'))
+    bounds[:] = np.column_stack((interfaces[:-1], interfaces[1:]))
+    bounds.formula_terms = 'sigma: lev_bnds ps: ps ptop: ptop'
+    ptop = out.createVariable('ptop', 'f8')
+    ptop.setncatts(dict(units='Pa', standard_name='air_pressure_at_top_of_atmosphere_model',
+                        long_name='Pressure at the model top'))
+    ptop.assignValue(0.)
+    pressure = out.createVariable('ps', 'f8', ('time', 'lat', 'lon'), zlib=True, complevel=1)
+    pressure.setncatts(dict(standard_name='surface_air_pressure', units='Pa',
+                            long_name='Monthly reference surface pressure used for vertical remapping'))
+    for start in range(0, len(months), 12):
+        pressure[start:start + 12] = reference_ps
+
+    time = out.createVariable('time', 'f8', ('time',))
+    time.setncatts(dict(standard_name='time', axis='T', calendar='proleptic_gregorian',
+                       units='days since 1850-01-01', bounds='time_bnds',
+                       comment='Centres of source calendar-month means. PlaSiC interpolates using year and month.'))
+    base = date(1850, 1, 1)
+    edges = [(date(i // 12, i % 12 + 1, 1) - base).days
+             for i in range(int(months[0]), int(months[-1]) + 2)]
+    out.createVariable('time_bnds', 'f8', ('time', 'bnds'))[:] = np.column_stack((edges[:-1], edges[1:]))
+    time[:] = (np.asarray(edges[:-1]) + edges[1:]) / 2
+    for name, values in [('year', months // 12), ('month', months % 12 + 1)]:
+        coord = out.createVariable(name, 'i4', ('time',))
+        coord.long_name = 'Calendar ' + name + ' read by PlaSiC'
+        coord[:] = values
+    out.converter_sha256 = sha256(Path(__file__))
+    try:
+        script = Path(__file__).resolve()
+        subprocess.run(['git', 'diff', '--quiet', 'HEAD', '--', script.name], cwd=script.parent,
+                       check=True, capture_output=True)
+        revision = subprocess.run(['git', 'log', '-1', '--format=%H', '--', script.name],
+                                  cwd=script.parent, capture_output=True, text=True, check=True)
+    except (OSError, subprocess.CalledProcessError):
+        return
+    if revision.stdout.strip():
+        out.converter_git_revision = revision.stdout.strip()
+
+
 def prepare(files, pressure_file, output, fixed=False, checksums=None, nlev=10):
     expected = [PREFIX + p + '.nc' for p in PERIODS]
     files = sorted(map(Path, files))
@@ -135,14 +190,13 @@ def prepare(files, pressure_file, output, fixed=False, checksums=None, nlev=10):
         with nc.Dataset(temporary, 'w', format='NETCDF4_CLASSIC') as out:
             for name, size in zip(('time', 'lev', 'lat', 'lon'), (1980, nlev, nlat, len(lon))):
                 out.createDimension(name, size)
-            for name, array in [('lev', sigma), ('lat', lat), ('lon', lon)]:
-                out.createVariable(name, 'f8', (name,))[:] = array
             months = np.arange(1850 * 12, 2015 * 12)
-            out.createVariable('year', 'i4', ('time',))[:] = months // 12
-            out.createVariable('month', 'i4', ('time',))[:] = months % 12 + 1
+            write_cf_grid(out, months, sigma, interfaces, lat, lon, ps)
             o3 = out.createVariable('o3', 'f4', ('time', 'lev', 'lat', 'lon'),
                                     zlib=True, complevel=1, chunksizes=(1, nlev, min(nlat, 32), len(lon)))
-            o3.units = 'mol mol-1'
+            o3.setncatts(dict(standard_name='mole_fraction_of_ozone_in_air', units='mol mol-1',
+                             long_name='Ozone mole fraction averaged over each model pressure layer',
+                             cell_methods='time: mean'))
             out.source_files = json.dumps(provenance)
             out.reference_ps_sha256 = sha256(pressure_file)
             out.interpolation = 'bilinear in latitude and periodic longitude; pressure-overlap means on published plev bounds; deepest source value extended below source grid'

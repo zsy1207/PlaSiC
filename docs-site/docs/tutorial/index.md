@@ -35,6 +35,8 @@ Fig. 0.2.1. **The two kinds of readers this tutorial addresses.** The first grou
 
 - **A complete and detailed textbook.** These online materials are more than a user manual: every component is derived from its governing equations and then mapped onto the corresponding source files, so that the reader learns both the physics and its implementation. Note that this textbook will be updated as the model evolves, so it is not a static document.
 
+- **Historical atmospheric forcing.** Monthly CO₂ and three-dimensional ozone fields can drive the same coupled simulation. [Monthly ozone input format](1-user-guide/1.1-Running-PlaSiC-first.md#monthly-ozone-input-format)
+
 - **An interactive visual interface.** The model is shipped with PlaSiC Studio, a graphical front end that lets you set the horizontal resolution, vertical levels, integration length and initial data, build the model, and start or stop a run with a click. Results are streamed while the model is running and can be inspected as 2-D fields on a rotatable globe or as 3-D volumes over a selected region, which makes it easy to build intuition before working with the raw model output.
 
     ![PlaSiC Studio: experiment configuration on the left and the live climate field on an interactive globe on the right](assets/images/app1.png)
@@ -65,9 +67,6 @@ Several excellent systems occupy the space between teaching and research climate
 Among these, **SpeedyWeather.jl** is the closest modern peer in terms of scope, and PlaSiC is complementary to it. SpeedyWeather.jl leans towards weather prediction and places strong emphasis on simulation speed and efficiency. PlaSiC, by contrast, places greater emphasis on understandability: it is written in C, a language with a much broader global audience, and its workflows lean towards climate—it includes a three-dimensional ocean and scripts for reproducing the historical experiment. In short, readers are warmly encouraged to study SpeedyWeather.jl as supplementary material.
 
 ## Planned features and roadmap
-
-Historical runs can now combine monthly external ozone fields with carbon dioxide forcing.
-[Monthly ozone input format](3-parameterizations/3.4-radiation-parameterization.md#monthly-external-ozone)
 
 PlaSiC is an actively developed model. The following features are not yet implemented, but are planned for future releases:
 

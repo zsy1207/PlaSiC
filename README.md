@@ -190,7 +190,7 @@ make -C src historical INITIAL_CONDITION=data/earth_t21_l10.restart \
 ```
 
 Omitting `OZONE_FORCING` uses the synthetic ozone profile used for the results
-shown here. For the three forcing contrasts, see the [input4MIPs historical experiment](experiments/ozone_historical/README.md). The radiation tutorial describes the [monthly ozone input format](docs-site/docs/tutorial/3-parameterizations/3.4-radiation-parameterization.md#monthly-external-ozone).
+shown here. For the three forcing contrasts, see the [input4MIPs historical experiment](experiments/ozone_historical/README.md). The user guide describes the [monthly ozone input format](docs-site/docs/tutorial/1-user-guide/1.1-Running-PlaSiC-first.md#monthly-ozone-input-format).
 
 → [Chapter 6.2, Historical experiment](https://sunmoumou1.github.io/PlaSiC/tutorial/6-experiments/6.2-historical-experiment-1850-2014/)
 

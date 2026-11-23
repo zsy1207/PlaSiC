@@ -114,6 +114,22 @@ class FullConversion(unittest.TestCase):
                     self.assertEqual(int(ds['month'][-1]), 12)
                     self.assertIn('sha256', ds.source_files)
                     self.assertEqual(ds.reference_ps_sha256, prepare.sha256(pressure_file))
+                    self.assertEqual(ds.converter_sha256, prepare.sha256(Path(prepare.__file__)))
+                    self.assertEqual(ds['o3'].standard_name, 'mole_fraction_of_ozone_in_air')
+                    self.assertEqual(ds['lev'].formula_terms, 'sigma: lev ps: ps ptop: ptop')
+                    self.assertEqual(float(ds['ptop'][...]), 0.)
+                    self.assertEqual(ds['ps'].dtype, np.dtype('f8'))
+                    np.testing.assert_array_equal(ds['ps'][19], 100000.)
+                    np.testing.assert_allclose(ds['lev_bnds'][:].mean(axis=1), ds['lev'][:])
+                    t = ds['time']
+                    b = ds[t.bounds][:]
+                    dates = nc.num2date(t[:], t.units, t.calendar)
+                    for year, length in ((1900, 28), (2000, 29)):
+                        feb = (year - 1850) * 12 + 1
+                        self.assertEqual(dates[feb].month, 2)
+                        self.assertEqual(dates[feb].year, year)
+                        self.assertEqual(b[feb, 1] - b[feb, 0], length)
+                        self.assertEqual(t[feb], b[feb].mean())
                 model = os.environ.get('PLASIC_TEST_MODEL')
                 if model:
                     subprocess.run([str(Path(model).resolve()), '--co2-ppm', '284.316853',

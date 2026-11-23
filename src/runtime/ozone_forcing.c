@@ -44,9 +44,14 @@ void runtime_ozone_forcing_close(void)
     forcing.source[0] = '\0';
 }
 
+int runtime_ozone_forcing_active(void)
+{
+    return forcing.file >= 0;
+}
+
 const char *runtime_ozone_forcing_source(void)
 {
-    return forcing.file < 0 ? "synthetic" : forcing.source;
+    return runtime_ozone_forcing_active() ? forcing.source : "synthetic";
 }
 
 /* Check rank before retrieving dimension IDs into the fixed-size buffer. */

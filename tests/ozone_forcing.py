@@ -322,6 +322,19 @@ class MonthlyOzone(unittest.TestCase):
                 header = subprocess.check_output(["ncdump", "-h", output / "ta.nc"], text=True)
                 self.assertIn(f':ozone_forcing_source = "{source}"', header)
                 self.assertIn(f':co2_forcing_source = "{self.co2[1]}"', header)
+                if label == "external":
+                    from netCDF4 import Dataset
+                    with Dataset(output / "toz.nc") as column, Dataset(output / "ps.nc") as pressure:
+                        self.assertEqual(column["toz"].units, "1e-5 m")
+                        self.assertEqual(column["toz"].cell_methods, "time: mean")
+                        self.assertEqual(column.ozone_forcing_source, str(self.ozone))
+                        np.testing.assert_array_equal(column["time_bnds"][:], pressure["time_bnds"][:])
+                        # Constant mass mixing ratio makes the analytic monthly
+                        # column exactly proportional to monthly mean pressure.
+                        expected = 1e-7 * pressure["ps"][:].astype(float) / (9.80665 * 2.14e-5)
+                        np.testing.assert_allclose(column["toz"][:], expected, rtol=1e-5)
+                else:
+                    self.assertFalse((output / "toz.nc").exists())
 
     def test_startup_validation(self):
         # The three-step run reaches February on its last step. A gap or a bad
