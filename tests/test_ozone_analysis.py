@@ -23,7 +23,28 @@ analysis = load('analysis', 'experiments/ozone_historical/fig1/compute_temperatu
 runner = load('runner', 'experiments/ozone_historical/run_experiments.py')
 
 
+verify = load('verify_restart', 'experiments/ozone_historical/verify_restart.py')
+
+
 class HistoricalAnalysis(unittest.TestCase):
+    def test_continuous_restart_checks_monthly_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            continuous, first, second = (Path(tmp) / name for name in ('full', 'first', 'second'))
+            for directory, start, count in ((continuous, 0, 24), (first, 0, 12), (second, 12, 12)):
+                (directory / 'monthly').mkdir(parents=True)
+                (directory / 'final.restart').write_bytes(b'same final state')
+                with nc.Dataset(directory / 'monthly/tas.nc', 'w') as ds:
+                    ds.createDimension('time', count)
+                    temp = ds.createVariable('tas', 'f4', ('time',))
+                    temp.units = 'K'
+                    temp.valid_range = np.array([150., 330.], dtype='f4')
+                    temp[:] = np.arange(start, start + count) + 280.
+            verify.compare(continuous, first, second)
+            with nc.Dataset(second / 'monthly/tas.nc', 'a') as ds:
+                ds['tas'].units = 'degree_Celsius'
+            with self.assertRaisesRegex(AssertionError, 'attribute units'):
+                verify.compare(continuous, first, second)
+
     def test_gaussian_and_calendar_weighting(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)/'tas.nc'

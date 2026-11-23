@@ -12,7 +12,15 @@ import numpy as np
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from experiments.ozone_historical.common import RUNS, sha256
-from experiments.ozone_historical.run_experiments import command, CO2, DEFAULT_LAUNCHER, ROOT
+from experiments.ozone_historical.run_experiments import command, DEFAULT_LAUNCHER, ROOT
+
+
+def compare_metadata(reference, other, label):
+    if set(reference.ncattrs()) != set(other.ncattrs()):
+        raise ValueError(f'{label}: attribute inventory differs')
+    for key in reference.ncattrs():
+        np.testing.assert_array_equal(reference.getncattr(key), other.getncattr(key),
+                                      err_msg=f'{label}: attribute {key} differs')
 
 
 def compare(continuous, first, second):
@@ -25,6 +33,8 @@ def compare(continuous, first, second):
     for name in sorted(filenames):
         with nc.Dataset(continuous / 'monthly' / name) as full, nc.Dataset(first / 'monthly' / name) as a, \
                 nc.Dataset(second / 'monthly' / name) as b:
+            for segment in (a, b):
+                compare_metadata(full, segment, name)
             if len(full.dimensions['time']) != 24 or len(a.dimensions['time']) != 12 or len(b.dimensions['time']) != 12:
                 raise ValueError(f'{name}: expected two complete years')
             if set(full.variables) != set(a.variables) or set(full.variables) != set(b.variables):
@@ -32,6 +42,7 @@ def compare(continuous, first, second):
             for key, var in full.variables.items():
                 for i, segment in enumerate((a, b)):
                     recorded = segment[key]
+                    compare_metadata(var, recorded, f'{name}/{key}')
                     part = slice(12*i, 12*i+12) if var.dimensions[:1] == ('time',) else slice(None)
                     if var.dimensions != recorded.dimensions or var.dtype != recorded.dtype:
                         raise ValueError(f'{name}/{key}: inconsistent dimensions or type')
@@ -40,28 +51,29 @@ def compare(continuous, first, second):
                     recorded.set_auto_maskandscale(False)
                     if np.asarray(var[part]).tobytes() != np.asarray(recorded[:]).tobytes():
                         raise ValueError(f'{name}/{key}: continuous and segmented values differ')
-    print(f'End restart and all {len(filenames)} monthly files match across 24 months.')
+    return len(filenames)
 
 
 def main(args):
     first, second = (args.output / 'co2_ozone' / str(year) for year in (1850, 1851))
     if args.continuous:
-        compare(args.continuous, first, second)
-        return
+        return compare(args.continuous, first, second)
     manifest = json.loads((first / 'run.json').read_text())
     argv = manifest['command']
     model = Path(argv[argv.index('--restart') - 1])
     restart = Path(argv[argv.index('--restart') + 1])
     ozone = Path(argv[argv.index('--ozone-forcing') + 1])
-    for path in (model, restart, ozone, CO2):
+    co2 = Path(argv[argv.index('--co2-forcing') + 1])
+    for path in (model, restart, ozone, co2):
         if sha256(path) != manifest['signature']['inputs'][str(path)]:
             raise ValueError(f'{path}: input differs from the segmented run')
     with TemporaryDirectory() as tmp:
         directory = Path(tmp)
         (directory / 'monthly').mkdir()
         cmd = command(model, restart, ozone, directory, 'co2_ozone', 1851, args.mpirun)
+        cmd[cmd.index('--co2-forcing') + 1] = str(co2)
         subprocess.run(cmd, cwd=ROOT / 'src', check=True)
-        compare(directory, first, second)
+        return compare(directory, first, second)
 
 
 if __name__ == '__main__':
@@ -69,4 +81,5 @@ if __name__ == '__main__':
     parser.add_argument('--output', type=Path, default=RUNS, help='archived annual case directories')
     parser.add_argument('--mpirun', default=DEFAULT_LAUNCHER)
     parser.add_argument('--continuous', type=Path, help='verify an existing two-year replay directory')
-    main(parser.parse_args())
+    count = main(parser.parse_args())
+    print(f'End restart matches. Compared {count} monthly files across 24 months.')
