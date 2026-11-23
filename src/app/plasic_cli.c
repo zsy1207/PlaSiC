@@ -7,7 +7,7 @@
  * are implemented by functions such as plasic_runtime_*.
  */
 
-#include "plasic_runtime.h"
+#include "runtime/runtime_internal.h"
 
 #include "plasic_cli.h"
 #include "plasic_config.h"
@@ -38,7 +38,7 @@ static void print_usage(FILE *stream, const char *program)
             "          [--progress FILE] [--frames FILE]\n"
             "          [--frame-interval N] [--progress-interval N]\n"
             "          [--monthly-output DIR]\n"
-            "          [--co2-forcing FILE | --co2-ppm PPMV]\n"
+            "          [--co2-forcing FILE | --co2-ppm PPMV] [--ozone-forcing FILE]\n"
             "          [--calendar gregorian|360day]\n"
             "          [--start-year YEAR] [--start-yday DAY]\n"
             "          [--start-hour HOUR] [--start-minute MINUTE]\n"
@@ -324,6 +324,12 @@ int plasic_cli_run(int argc, char **argv)
             options.co2_forcing_input = argv[++argument];
         }
 
+        else if (strcmp(argv[argument], "--ozone-forcing") == 0 &&
+                 argument + 1 < argc)
+        {
+            options.ozone_forcing_input = argv[++argument];
+        }
+
         else if (strcmp(argv[argument], "--co2-ppm") == 0 &&
                  argument + 1 < argc)
         {
@@ -576,15 +582,18 @@ int plasic_cli_run(int argc, char **argv)
     /*
      * PlaSiC runtime initialization
      */
-    status = plasic_runtime_initialize(&options);
+    status = runtime_initialize_before_cleanup(&options);
 
     /*
      * Runtime initialization failed.
      */
     if (status != PLASIC_RUNTIME_OK)
     {
-        fprintf(stderr, "PlaSiC initialization failed: %s\n",
-                plasic_runtime_error());
+        if (plasic_mypid == 0)
+        {
+            fprintf(stderr, "PlaSiC initialization failed: %s\n", plasic_runtime_error());
+            fflush(stderr);
+        }
 
         /*
          * Call finalize even if initialization failed.
