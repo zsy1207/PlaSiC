@@ -44,6 +44,27 @@ class Preprocessing(unittest.TestCase):
             prepare.regrid(v, [1000., 100000.], bounds, [-80., 80.], [0., 90., 180., 360.],
                            [0., 1.], [0.], [0.], np.array([[1e5]]))
 
+    def test_conservative_cells_across_greenwich(self):
+        # The source includes both poles and straddles the target's longitude seam.
+        with tempfile.TemporaryDirectory() as tmp, nc.Dataset(Path(tmp) / 'grid.nc', 'w') as grid:
+            grid.createDimension('bnds', 2)
+            for axis, centres, edges in [('lat', [-90., 0., 90.], [-90., -45., 45., 90.]),
+                                         ('lon', [45., 135., 225., 315.], [0., 90., 180., 270., 360.])]:
+                grid.createDimension(axis, len(centres))
+                coordinate = grid.createVariable(axis, 'f8', (axis,))
+                coordinate[:] = centres
+                coordinate.bounds = axis + '_bounds'
+                grid.createVariable(coordinate.bounds, 'f8', (axis, 'bnds'))[:] = np.column_stack((edges[:-1], edges[1:]))
+            _, lat, lon = prepare.sigma_grid(nlat=4)
+            wy, wx = prepare.area_weights(grid, lat, lon)
+            raw = np.zeros((3, 4))
+            raw[-1, 0] = 1.  # One northern polar sector.
+            remapped = wy @ raw @ wx.T
+            band_areas = np.polynomial.legendre.leggauss(4)[1][::-1] / 2
+            self.assertAlmostEqual(band_areas @ remapped.mean(axis=1), (1 - np.sin(np.pi/4)) / 8)
+            self.assertAlmostEqual(remapped[0, 0], remapped[0, 1] / 2)
+            np.testing.assert_array_equal(remapped[-1], 0.)
+
     def test_published_month_units_and_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
             with nc.Dataset(Path(tmp)/'source.nc', 'w') as ds:
@@ -93,6 +114,10 @@ class FullConversion(unittest.TestCase):
                     ds['plev'].units = 'hPa'
                     ds['plev'].bounds = 'bounds_plev'
                     ds.createDimension('bnds', 2)
+                    for axis, bounds in [('lat', [[-90., 0.], [0., 90.]]),
+                                         ('lon', [[-90., 90.], [90., 270.]])]:
+                        ds[axis].bounds = axis + '_bnds'
+                        ds.createVariable(ds[axis].bounds, 'f8', (axis, 'bnds'))[:] = bounds
                     ds.createVariable('bounds_plev', 'f8', ('plev', 'bnds'))[:] = [[0., 500.], [500., 1050.]]
                     t = ds.createVariable('time', 'f8', ('time',))
                     t.units, t.calendar = 'months since 1850-01-01 00:00', 'standard'
@@ -108,6 +133,8 @@ class FullConversion(unittest.TestCase):
                 prepare.prepare(files, pressure_file, output, fixed)
                 self.assertEqual(interrupted.read_bytes(), b'unfinished earlier run')
                 with nc.Dataset(output) as ds:
+                    self.assertEqual(ds.horizontal_remapping, 'conservative')
+                    self.assertEqual(ds['o3'].chunking(), [1, 10, 16, 64])
                     self.assertEqual(ds['o3'].shape, (1980, 10, 32, 64))
                     np.testing.assert_allclose(ds['o3'][1979], 1e-6 + (11 if fixed else 1979)*1e-10, rtol=1e-6)
                     self.assertEqual(int(ds['year'][-1]), 2014)

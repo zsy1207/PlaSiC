@@ -60,11 +60,39 @@ def sigma_grid(nlev=10, nlat=32):
             np.arange(nlat * 2) * 180 / nlat)
 
 
-def regrid(values, pressure, bounds, lat, lon, interfaces, target_lat, target_lon, ps):
-    """Bilinear horizontal remap, followed by pressure-weighted layer means.
+def area_weights(dataset, target_lat, target_lon):
+    """Fraction of each Gaussian cell covered by each published source cell."""
+    source_lat, source_lon = finite(dataset['lat']), finite(dataset['lon'])
+    source_y = np.sin(np.deg2rad(finite(dataset[dataset['lat'].bounds])))
+    source_x = finite(dataset[dataset['lon'].bounds])
+    # Align each periodic longitude interval with its centre in [0, 360).
+    source_x = (source_x - source_lon[:, None] + 180) % 360 - 180 + (source_lon % 360)[:, None]
+    source_y = np.sort(source_y[np.argsort(source_lat)], axis=1)
+    source_x = np.sort(source_x[np.argsort(source_lon % 360)], axis=1)
+    mu, bands = np.polynomial.legendre.leggauss(len(target_lat))
+    np.testing.assert_allclose(np.sin(np.deg2rad(target_lat)), mu[::-1], atol=1e-6, rtol=0)
+    edges = np.r_[-1., -1. + np.cumsum(bands)]
+    edges[-1] = 1.
+    target_y = np.column_stack((edges[:-1], edges[1:]))[::-1]
+    half_width = 180. / len(target_lon)
+    target_x = np.asarray(target_lon)[:, None] + np.array([-half_width, half_width])
 
-    The cumulative integral of the piecewise constant source mixing ratio is
-    evaluated at model interfaces. Differences give each layer's ozone column.
+    def overlap(target, source):
+        width = np.minimum(target[:, 1, None], source[:, 1]) - np.maximum(target[:, 0, None], source[:, 0])
+        return np.maximum(width, 0.) / (target[:, 1] - target[:, 0])[:, None]
+
+    wy = overlap(target_y, source_y)
+    wx = sum(overlap(target_x, source_x + shift) for shift in (-360., 0., 360.))
+    for weights in (wy, wx):
+        np.testing.assert_allclose(weights.sum(axis=1), 1., rtol=0, atol=1e-10)
+    return wy, wx
+
+
+def regrid(values, pressure, bounds, lat, lon, interfaces, target_lat, target_lon, ps, weights=None):
+    """Integrate horizontally remapped mixing ratios over target pressure layers.
+
+    Production uses published cell overlap weights. Point interpolation is
+    retained for comparison with previously prepared bilinear inputs.
     """
     if np.any(values < 0) or np.any(values > 1):
         raise ValueError('ozone mole fraction must lie in [0, 1]')
@@ -87,11 +115,15 @@ def regrid(values, pressure, bounds, lat, lon, interfaces, target_lat, target_lo
         raise ValueError('source pressure cells must have positive thickness')
     # Put the pressure and horizontal axes in increasing order for interpolation.
     sorted_values = values[np.ix_(*orders)]
-    x = np.r_[x[-1] - 360, x, x[0] + 360]
-    wrapped = np.concatenate((sorted_values[..., -1:], sorted_values, sorted_values[..., :1]), axis=2)
-    query = np.stack(np.meshgrid(np.clip(target_lat, y[0], y[-1]), np.asarray(target_lon) % 360,
-                                 indexing='ij'), axis=-1)
-    horizontal = RegularGridInterpolator((y, x), wrapped.transpose(1, 2, 0))(query).transpose(2, 0, 1)
+    if weights is not None:
+        wy, wx = weights
+        horizontal = (wy @ sorted_values) @ wx.T
+    else:
+        x = np.r_[x[-1] - 360, x, x[0] + 360]
+        wrapped = np.concatenate((sorted_values[..., -1:], sorted_values, sorted_values[..., :1]), axis=2)
+        query = np.stack(np.meshgrid(np.clip(target_lat, y[0], y[-1]), np.asarray(target_lon) % 360,
+                                     indexing='ij'), axis=-1)
+        horizontal = RegularGridInterpolator((y, x), wrapped.transpose(1, 2, 0))(query).transpose(2, 0, 1)
     totals = np.cumsum(horizontal * np.diff(edges)[:, None, None], axis=0)
     cumulative = np.concatenate((np.zeros_like(totals[:1]), totals), axis=0)
 
@@ -193,13 +225,14 @@ def prepare(files, pressure_file, output, fixed=False, checksums=None, nlev=10):
             months = np.arange(1850 * 12, 2015 * 12)
             write_cf_grid(out, months, sigma, interfaces, lat, lon, ps)
             o3 = out.createVariable('o3', 'f4', ('time', 'lev', 'lat', 'lon'),
-                                    zlib=True, complevel=1, chunksizes=(1, nlev, min(nlat, 32), len(lon)))
+                                    zlib=True, complevel=1, chunksizes=(1, nlev, min(nlat, 16), len(lon)))
             o3.setncatts(dict(standard_name='mole_fraction_of_ozone_in_air', units='mol mol-1',
                              long_name='Ozone mole fraction averaged over each model pressure layer',
                              cell_methods='time: mean'))
             out.source_files = json.dumps(provenance)
             out.reference_ps_sha256 = sha256(pressure_file)
-            out.interpolation = 'bilinear in latitude and periodic longitude; pressure-overlap means on published plev bounds; deepest source value extended below source grid'
+            out.horizontal_remapping = 'conservative'
+            out.interpolation = 'area overlap on native pressure levels and Gaussian latitude bands; pressure-overlap means on published plev bounds; deepest source value extended below source grid'
             out.vertical_mapping = 'p=sigma*fixed monthly reference ps; not instantaneous surface pressure'
             out.ozone_experiment = 'repeated 1850 seasonal cycle' if fixed else 'historical 1850-2014'
             position = 0
@@ -219,11 +252,12 @@ def prepare(files, pressure_file, output, fixed=False, checksums=None, nlev=10):
                     bounds = finite(ds[ds['plev'].bounds]) * (100 if punit == 'hPa' else 1)
                     dates = month_indices(ds['time'])
                     np.testing.assert_array_equal(dates, months[position:position + len(dates)])
+                    source_lat, source_lon = finite(ds['lat']), finite(ds['lon'])
+                    weights = area_weights(ds, lat, lon)
                     for i, date in enumerate(dates):
                         if not fixed or position < 12:
                             o3[position] = regrid(finite(variable, i), pressure, bounds,
-                                                  finite(ds['lat']), finite(ds['lon']),
-                                                  interfaces, lat, lon, ps[date % 12])
+                                                  source_lat, source_lon, interfaces, lat, lon, ps[date % 12], weights)
                         else:
                             o3[position] = o3[position % 12]
                         position += 1

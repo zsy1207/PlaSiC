@@ -189,7 +189,7 @@ make -C src historical INITIAL_CONDITION=data/earth_t21_l10.restart \
   OZONE_FORCING=/path/to/monthly_ozone.nc
 ```
 
-Omitting `OZONE_FORCING` uses the synthetic ozone profile used for the results
+Set `CO2_PPM=284.316853` with `make historical` to hold CO₂ fixed while reading the monthly ozone file. Omitting `OZONE_FORCING` uses the synthetic ozone profile used for the results
 shown here. For the three forcing contrasts, see the [input4MIPs historical experiment](experiments/ozone_historical/README.md). The user guide describes the [monthly ozone input format](docs-site/docs/tutorial/1-user-guide/1.1-Running-PlaSiC-first.md#monthly-ozone-input-format).
 
 → [Chapter 6.2, Historical experiment](https://sunmoumou1.github.io/PlaSiC/tutorial/6-experiments/6.2-historical-experiment-1850-2014/)

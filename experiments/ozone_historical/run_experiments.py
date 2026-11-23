@@ -24,7 +24,7 @@ CO2 = ROOT / 'src/data/forcing/CO2/mole-fraction-of-carbon-dioxide-in-air_input4
 
 sys.path.insert(0, str(ROOT))
 from experiments.ozone_historical.common import CASES, RUNS, sha256 as digest
-from experiments.forecast_era5.scripts.restart_io import decode_int, read_raw_records
+from experiments.historical_3d_500y.read_restart import read_records
 from experiments.ozone_historical.fig1.compute_temperature import annual_temperature
 
 
@@ -105,8 +105,9 @@ def segment(args, case, year, inputs):
     (directory / 'run.json').write_text(json.dumps(manifest, indent=2))
     with (directory / 'run.log').open('w') as log:
         subprocess.run(cmd, cwd=ROOT / 'src', stdout=log, stderr=subprocess.STDOUT, check=True)
-    records = dict(read_raw_records(directory / 'final.restart'))
-    if decode_int(records['nstep']) != year_start(year + 1):
+    # The shared historical reader preserves each word as float32 bits.
+    step = read_records(directory / 'final.restart')['nstep'].view('<i4').item()
+    if step != year_start(year + 1):
         raise ValueError(f'{directory}: final restart clock differs from requested end')
     tas = directory / 'monthly/tas.nc'
     _, temperatures = annual_temperature(tas, year, year)

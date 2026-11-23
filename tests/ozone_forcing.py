@@ -21,7 +21,7 @@ MPI_MODEL = os.environ.get("PLASIC_TEST_MPI_MODEL")
 MPIRUN = os.environ.get("MPIRUN", "mpirun")
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from experiments.forecast_era5.scripts.restart_io import decode_float, read_raw_records
+from experiments.historical_3d_500y.read_restart import read_records
 
 SURFACE = ROOT / "src/data/surface"
 DIMS = ("time", "lev", "lat", "lon")
@@ -89,8 +89,8 @@ class MonthlyOzone(unittest.TestCase):
         # Restart accumulators at the top of the atmosphere retain the sum of
         # the net shortwave and longwave fluxes even for a partial month.
         self.run_model(*self.co2, *options)
-        fields = dict(read_raw_records(self.directory / "status"))
-        return np.stack([decode_float(fields[name], 32 * 64) for name in ("atsol", "atthr")])
+        fields = read_records(self.directory / "status")
+        return np.stack([fields[name] for name in ("atsol", "atthr")])
 
     def test_known_300_du_column(self):
         # Obtain the actual first-step pressure through the model's independent
@@ -162,8 +162,8 @@ class MonthlyOzone(unittest.TestCase):
                 def radiation(values):
                     write_forcing(self.ozone, values, months=months, years=years)
                     self.run_model(*options)
-                    fields = dict(read_raw_records(self.directory / "status"))
-                    return np.stack([decode_float(fields[k], 32 * 64) for k in ("atsol", "atthr")])
+                    fields = read_records(self.directory / "status")
+                    return np.stack([fields[k] for k in ("atsol", "atthr")])
 
                 expected = radiation(low + weight * (high - low))
                 actual = radiation(np.array([low, high])[:, None, None, None])
@@ -220,6 +220,32 @@ class MonthlyOzone(unittest.TestCase):
                 self.assertEqual(result.stderr.count("check units for Earth ozone"), expected_warnings)
                 self.assertEqual(result.stderr.count("global mean column ="), 1)
 
+    def test_mpi_late_month_unit_advisory(self):
+        if MPI_MODEL is None:
+            self.skipTest("requires a two-rank T21 L10 plasic.x")
+        config = json.loads(self.config.read_text())
+        config.update(start_yday=16, start_hour=0, start_minute=0, steps=2)
+        self.config.write_text(json.dumps(config))
+        values = np.full((3, 10, 32, 64), 1e-7)
+        values[2, 0, -1, 0] = 0.2  # March is outside the two-step run.
+        for february, expected in ((1e-7, 0), (0.2, 1)):
+            values[1, 0, -1, 0] = february
+            write_forcing(self.ozone, values, months=(1, 2, 3))
+            result = self.run_model(*self.co2, "--ozone-forcing", self.ozone, mpi=True)
+            self.assertEqual(result.stderr.count("check units for Earth ozone"), expected)
+
+    def test_mpi_retry_after_failed_extension(self):
+        driver = Path(MPI_MODEL).with_name("ozone_retry") if MPI_MODEL else None
+        if driver is None or not driver.is_file():
+            self.skipTest("requires the two-rank API driver built by make test-ozone-mpi")
+        values = np.full((3, 10, 32, 64), 1e-7)
+        values[2, 1, -1, 0] = np.nan  # The expanded run encounters bad March data on rank one.
+        write_forcing(self.ozone, values, months=(1, 2, 3))
+        env = dict(os.environ, OMPI_ALLOW_RUN_AS_ROOT="1", OMPI_ALLOW_RUN_AS_ROOT_CONFIRM="1")
+        result = subprocess.run([*shlex.split(MPIRUN), "-np", "2", driver, self.ozone, SURFACE],
+                                capture_output=True, text=True, env=env, timeout=45)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_mpi_southern_slab_failure(self):
         if MPI_MODEL is None:
             self.skipTest("requires a two-rank T21 L10 plasic.x")
@@ -274,7 +300,7 @@ class MonthlyOzone(unittest.TestCase):
         self.run_model(*self.co2, "--steps", "1")
         initial = self.directory / "initial.restart"
         (self.directory / "status").rename(initial)
-        nstep = int(np.frombuffer(dict(read_raw_records(initial))["nstep"], dtype="<i4")[0])
+        nstep = read_records(initial)["nstep"].view("<i4").item()
         self.config.write_text(json.dumps(dict(
             steps=2, restart=str(initial), output=str(self.directory / "status"),
         )))
@@ -299,8 +325,8 @@ class MonthlyOzone(unittest.TestCase):
             with self.subTest(forcing=forcing):
                 options = ("--co2-ppm", "300", "--dynamics-only", *forcing, "--reset-nstep")
                 self.run_model(*options, str(limit - 1))
-                records = dict(read_raw_records(output))
-                self.assertEqual(int.from_bytes(records["nstep"], "little", signed=True), limit)
+                records = read_records(output)
+                self.assertEqual(records["nstep"].view("<i4").item(), limit)
                 output.unlink()
                 self.run_model(*options, str(limit), error="model clock range")
                 self.assertFalse(output.exists())
@@ -322,19 +348,24 @@ class MonthlyOzone(unittest.TestCase):
                 header = subprocess.check_output(["ncdump", "-h", output / "ta.nc"], text=True)
                 self.assertIn(f':ozone_forcing_source = "{source}"', header)
                 self.assertIn(f':co2_forcing_source = "{self.co2[1]}"', header)
-                if label == "external":
-                    from netCDF4 import Dataset
-                    with Dataset(output / "toz.nc") as column, Dataset(output / "ps.nc") as pressure:
-                        self.assertEqual(column["toz"].units, "1e-5 m")
-                        self.assertEqual(column["toz"].cell_methods, "time: mean")
-                        self.assertEqual(column.ozone_forcing_source, str(self.ozone))
-                        np.testing.assert_array_equal(column["time_bnds"][:], pressure["time_bnds"][:])
-                        # Constant mass mixing ratio makes the analytic monthly
-                        # column exactly proportional to monthly mean pressure.
+                from netCDF4 import Dataset
+                with Dataset(output / "toz.nc") as column, Dataset(output / "ps.nc") as pressure:
+                    self.assertEqual(column["toz"].units, "1e-5 m")
+                    self.assertEqual(column["toz"].cell_methods, "time: mean")
+                    self.assertEqual(column.ozone_forcing_source, source)
+                    np.testing.assert_array_equal(column["time_bnds"][:], pressure["time_bnds"][:])
+                    actual = column["toz"][:]
+                    if label == "external":
+                        # Constant mass fraction makes the column proportional to mean pressure.
                         expected = 1e-7 * pressure["ps"][:].astype(float) / (9.80665 * 2.14e-5)
-                        np.testing.assert_allclose(column["toz"][:], expected, rtol=1e-5)
-                else:
-                    self.assertFalse((output / "toz.nc").exists())
+                        np.testing.assert_allclose(actual, expected, rtol=1e-5)
+                    else:
+                        mu = np.sin(np.deg2rad(column["lat"][:].astype(float)))
+                        days = 32 + np.arange(28 * 32) / 32
+                        season = np.cos(2 * np.pi * (days - 90) / 365).mean()
+                        expected = 1000 * (.25 + .11 * abs(mu) + .08 * mu * season)
+                        np.testing.assert_allclose(actual, np.broadcast_to(expected[None, :, None], actual.shape),
+                                                   rtol=0, atol=.002)
 
     def test_startup_validation(self):
         # The three-step run reaches February on its last step. A gap or a bad
@@ -355,14 +386,17 @@ class MonthlyOzone(unittest.TestCase):
         values[:, 0, 5, 9] = 0.0
         write_forcing(self.ozone, values)
         zero = self.fluxes("--ozone-forcing", self.ozone)
-        values[:, 0, 5, 9] = -1e-12
-        write_forcing(self.ozone, values)
-        np.testing.assert_array_equal(zero, self.fluxes("--ozone-forcing", self.ozone))
+        for mass, warnings in ((-1e-12, 0), (-5e-10, 1)):
+            values[:, 0, 5, 9] = mass
+            write_forcing(self.ozone, values)
+            np.testing.assert_array_equal(zero, self.fluxes("--ozone-forcing", self.ozone))
+            result = self.run_model(*self.co2, "--ozone-forcing", self.ozone)
+            self.assertEqual(result.stderr.count("check the input regridding"), warnings)
 
     def test_unit_spellings(self):
         values = np.full((2, 10, 32, 64), 1e-7)
         for reference, spellings in (("kg kg-1", ("kg kg**-1", "kg kg^-1", "kg/kg", " kg  kg-1 ", "kg*kg^-1")),
-                                     ("mol mol-1", ("mol mol**-1", "mol/mol", "mole mole-1", "mole/mole"))):
+                                     ("mol mol-1", ("mol mol**-1", "mol/mol", "mole mole-1", "mole/mole", "mol mol-1".ljust(256)))):
             write_forcing(self.ozone, values, units=reference)
             expected = self.fluxes("--ozone-forcing", self.ozone)
             for units in spellings:
@@ -377,7 +411,7 @@ class MonthlyOzone(unittest.TestCase):
         self.run_model(*options, error="1850-02")
         write_forcing(self.ozone, 1e-6, months=(1, 3))
         self.run_model(*options, error="consecutive")
-        for units in ("ppmv", "kg / kg**", "mol/mol^", "kg^kg-1", "kg kg***-1"):
+        for units in ("ppmv", "kg / kg**", "mol/mol^", "kg^kg-1", "kg kg***-1", "mol mol-1".ljust(80) + "x"):
             with self.subTest(units=units):
                 write_forcing(self.ozone, 1e-6, units=units)
                 self.run_model(*options, error="units")

@@ -73,6 +73,8 @@ def prepare_inputs(args, data, run):
             run(sys.executable, HERE / 'prepare_ozone.py', *files, '--reference-ps', ps, '--output', path, *options)
         with nc.Dataset(path) as prepared:
             sources = {s['file']: s['sha256'] for s in json.loads(prepared.source_files)}
+            if getattr(prepared, 'horizontal_remapping', 'bilinear') != 'conservative':
+                raise ValueError(f'{path}: this pipeline requires area-conservative inputs, use a new data directory')
             if sources != checksums or prepared.reference_ps_sha256 != reference_hash:
                 raise ValueError(f'{path}: existing conversion used different inputs')
 

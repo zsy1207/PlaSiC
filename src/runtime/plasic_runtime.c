@@ -100,12 +100,14 @@ void plasic_runtime_finalize(void)
     (void)mp_stop();
 }
 
-static int apply_monthly_forcing(void)
+static int apply_monthly_forcing(int dynamics_only)
 {
     const int year = plasic_ndatim[0];
     const int month = plasic_ndatim[1];
     const int status = runtime_co2_forcing_apply(year, month);
-    return status == PLASIC_RUNTIME_OK ? runtime_ozone_forcing_apply() : status;
+    if (status != PLASIC_RUNTIME_OK || dynamics_only || plasic_nrad <= 0)
+        return status;
+    return runtime_ozone_forcing_apply();
 }
 
 /* The final restart clock includes the increment after the last step. */
@@ -376,7 +378,7 @@ static int initialize(const plasic_runtime_options *options, int report_on_root)
     if (status == PLASIC_RUNTIME_OK)
         status = runtime_ozone_forcing_validate(options->steps);
     if (status == PLASIC_RUNTIME_OK)
-        status = apply_monthly_forcing();
+        status = apply_monthly_forcing(options->dynamics_only);
     if (status != PLASIC_RUNTIME_OK)
     {
         return status;
@@ -434,11 +436,16 @@ int plasic_runtime_run(const plasic_runtime_options *options)
     if (status != PLASIC_RUNTIME_OK)
         return status;
 
+    /* A library caller can request another interval on an initialized model. */
+    status = runtime_ozone_forcing_validate(options->steps);
+    if (status != PLASIC_RUNTIME_OK)
+        return status;
+
     for (step = 0; step < options->steps; ++step)
     {
         step2cal(plasic_calendar, plasic_nstep, plasic_ndatim);
 
-        status = apply_monthly_forcing();
+        status = apply_monthly_forcing(options->dynamics_only);
         if (status != PLASIC_RUNTIME_OK)
         {
             return status;

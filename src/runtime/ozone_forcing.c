@@ -21,6 +21,7 @@ static struct
     size_t months;
     int64_t first_month;
     int64_t cached_record[2];
+    int64_t validated_low, validated_high;
     double mass_factor;
     double fill_value;
     double missing_value;
@@ -28,6 +29,8 @@ static struct
     char source[4096];
 } forcing = {.file = -1, .cached_record = {-1, -1}};
 
+/* Molar masses in g/mol. */
+static const double ozone_molar_mass = 47.9982, dry_air_molar_mass = 28.9644;
 static const size_t local_values = (size_t)PLASIC_NHOR * PLASIC_NLEV;
 
 /* Mass fractions down to this far below zero are regridding noise and read as zero. */
@@ -41,17 +44,13 @@ void runtime_ozone_forcing_close(void)
     forcing.slabs = NULL;
     forcing.file = -1;
     forcing.cached_record[0] = forcing.cached_record[1] = -1;
+    forcing.validated_high = -1;
     forcing.source[0] = '\0';
-}
-
-int runtime_ozone_forcing_active(void)
-{
-    return forcing.file >= 0;
 }
 
 const char *runtime_ozone_forcing_source(void)
 {
-    return runtime_ozone_forcing_active() ? forcing.source : "synthetic";
+    return forcing.file >= 0 ? forcing.source : "synthetic";
 }
 
 /* Check rank before retrieving dimension IDs into the fixed-size buffer. */
@@ -169,7 +168,7 @@ static double units_factor(const char *units)
     else if (strncmp(compact, "mol", 3) == 0)
     {
         unit = strncmp(compact, "mole", 4) == 0 ? "mole" : "mol";
-        factor = 47.9982 / 28.9644;
+        factor = ozone_molar_mass / dry_air_molar_mass;
     }
     else
         return 0.0;
@@ -189,29 +188,34 @@ static double units_factor(const char *units)
 
 static int read_units(void)
 {
-    char text[32];
-    char *string = NULL;
-    const char *units = NULL;
+    char *text = NULL;
     nc_type type;
     size_t length;
 
     if (nc_inq_att(forcing.file, forcing.variable, "units", &type, &length) != NC_NOERR)
         return 0;
-    if (type == NC_CHAR && length < sizeof(text) &&
-        nc_get_att_text(forcing.file, forcing.variable, "units", text) == NC_NOERR)
+    forcing.mass_factor = 0.0;
+    if (type == NC_CHAR && length < SIZE_MAX)
     {
-        text[length] = '\0';
-        units = text;
+        /* Fortran writers can space-pad a fixed-width CHAR attribute. */
+        text = malloc(length + 1);
+        if (text != NULL && nc_get_att_text(forcing.file, forcing.variable, "units", text) == NC_NOERR)
+        {
+            while (length && (text[length - 1] == '\0' || isspace((unsigned char)text[length - 1])))
+                --length;
+            text[length] = '\0';
+            if (memchr(text, '\0', length) == NULL)
+                forcing.mass_factor = units_factor(text);
+        }
+        free(text);
     }
     else if (type == NC_STRING && length == 1 &&
-             nc_get_att_string(forcing.file, forcing.variable, "units", &string) == NC_NOERR)
+             nc_get_att_string(forcing.file, forcing.variable, "units", &text) == NC_NOERR)
     {
-        units = string;
+        if (text != NULL)
+            forcing.mass_factor = units_factor(text);
+        (void)nc_free_string(1, &text);
     }
-
-    forcing.mass_factor = units != NULL ? units_factor(units) : 0.0;
-    if (string != NULL)
-        (void)nc_free_string(1, &string);
     return forcing.mass_factor != 0.0;
 }
 
@@ -353,7 +357,7 @@ int runtime_ozone_forcing_open(const char *path)
     return status;
 }
 
-static int read_month(int64_t record, double *slab)
+static int read_month(int64_t record, double *slab, float warnings[2])
 {
     const size_t latitude_offset = (size_t)mp_local_offset(PLASIC_NLPP);
     const size_t start[] = {(size_t)record, 0, latitude_offset, 0};
@@ -374,11 +378,9 @@ static int read_month(int64_t record, double *slab)
     for (size_t i = 0; i < local_values; ++i)
     {
         const double value = slab[i];
-        double mass_fraction = value * forcing.mass_factor;
-        if (mass_fraction < 0.0 && mass_fraction >= -negative_tolerance)
-            mass_fraction = 0.0;
+        const double mass_fraction = value * forcing.mass_factor;
         if (!isfinite(value) || value == forcing.fill_value ||
-            value == forcing.missing_value || mass_fraction < 0.0 || mass_fraction > 1.0)
+            value == forcing.missing_value || mass_fraction < -negative_tolerance || mass_fraction > 1.0)
         {
             const size_t horizontal = i % PLASIC_NHOR;
             runtime_set_error("invalid or missing ozone forcing value at %d-%02d: "
@@ -389,7 +391,14 @@ static int read_month(int64_t record, double *slab)
                               horizontal % PLASIC_NLON, value, forcing.source);
             return PLASIC_RUNTIME_IO_FAILED;
         }
-        slab[i] = mass_fraction;
+        if (warnings != NULL)
+        {
+            if (mass_fraction > 1e-4)
+                warnings[0] = 1.0f;
+            if (mass_fraction < -1e-12)
+                warnings[1] = 1.0f;
+        }
+        slab[i] = mass_fraction < 0.0 ? 0.0 : mass_fraction;
     }
     return PLASIC_RUNTIME_OK;
 }
@@ -402,7 +411,7 @@ static int cached_month(int64_t record, const double **values)
     if (forcing.cached_record[slot] != record)
     {
         forcing.cached_record[slot] = -1;
-        const int status = sync_ozone_error(read_month(record, slab));
+        const int status = sync_ozone_error(read_month(record, slab, NULL));
         if (status != PLASIC_RUNTIME_OK)
             return status;
         forcing.cached_record[slot] = record;
@@ -415,13 +424,12 @@ static int cached_month(int64_t record, const double **values)
  * File record of the month containing step, and the record its mid-month
  * interpolation reads with weight. Records may lie outside the file.
  */
-static int64_t step_records(int32_t step, int64_t *neighbor, float *weight)
+static int64_t step_records(int32_t step, const int32_t date[7], int64_t *neighbor, float *weight)
 {
-    int32_t datim[7], month_a, month_b;
+    int32_t month_a, month_b;
 
-    step2cal(plasic_calendar, step, datim);
     momint(plasic_calendar, step, &month_a, &month_b, weight);
-    const int64_t record = (int64_t)datim[0] * 12 + datim[1] - 1 - forcing.first_month;
+    const int64_t record = (int64_t)date[0] * 12 + date[1] - 1 - forcing.first_month;
     *neighbor = *weight > 0 ? record + (month_b - month_a) : record;
     return record;
 }
@@ -440,23 +448,22 @@ int runtime_ozone_forcing_validate(int32_t steps)
 {
     const int64_t last_step = (int64_t)plasic_nstep + steps - 1;
     int64_t first, last, first_neighbor, last_neighbor;
-    int32_t start_date[7], end_date[7];
+    int32_t end_date[7];
     float weight;
 
     if (forcing.file < 0)
         return PLASIC_RUNTIME_OK;
-    first = step_records(plasic_nstep, &first_neighbor, &weight);
-    last = step_records((int32_t)last_step, &last_neighbor, &weight);
+    step2cal(plasic_calendar, (int32_t)last_step, end_date);
+    first = step_records(plasic_nstep, plasic_ndatim, &first_neighbor, &weight);
+    last = step_records((int32_t)last_step, end_date, &last_neighbor, &weight);
     if (!covered(first) || !covered(last))
     {
         const int64_t file_end = forcing.first_month + (int64_t)forcing.months - 1;
-        step2cal(plasic_calendar, plasic_nstep, start_date);
-        step2cal(plasic_calendar, (int32_t)last_step, end_date);
         runtime_set_error("ozone forcing covers %d-%02d to %d-%02d, but the run needs "
                           "%d-%02d to %d-%02d (file '%s')",
                           (int)(forcing.first_month / 12), (int)(forcing.first_month % 12) + 1,
                           (int)(file_end / 12), (int)(file_end % 12) + 1,
-                          start_date[0], start_date[1], end_date[0], end_date[1],
+                          plasic_ndatim[0], plasic_ndatim[1], end_date[0], end_date[1],
                           forcing.source);
         return PLASIC_RUNTIME_BAD_ARGUMENT;
     }
@@ -464,16 +471,39 @@ int runtime_ozone_forcing_validate(int32_t steps)
     /* Interpolation reaches one record beyond the run only at its two ends. */
     const int64_t low = first_neighbor < first && covered(first_neighbor) ? first_neighbor : first;
     const int64_t high = last_neighbor > last && covered(last_neighbor) ? last_neighbor : last;
-    /* Validate local slabs before a single collective. Reverse order retains
+    if (low >= forcing.validated_low && high <= forcing.validated_high)
+        return PLASIC_RUNTIME_OK;
+    int64_t retained[2] = {-1, -1};
+    float warnings[2] = {0.0f, 0.0f};
+    /* Reading can overwrite both cache slots. Publish their new identities
+     * only when all ranks have succeeded, including on a caller's retry. */
+    forcing.cached_record[0] = forcing.cached_record[1] = -1;
+    forcing.validated_high = -1;
+    /* Validate local slabs before synchronizing. Reverse order retains
      * the first interpolation pair in the cache when integration starts. */
     int status = PLASIC_RUNTIME_OK;
     for (int64_t record = high; record >= low && status == PLASIC_RUNTIME_OK; --record)
     {
         const int slot = (int)(record % 2);
-        status = read_month(record, forcing.slabs + (size_t)slot * local_values);
-        forcing.cached_record[slot] = status == PLASIC_RUNTIME_OK ? record : -1;
+        status = read_month(record, forcing.slabs + (size_t)slot * local_values, warnings);
+        retained[slot] = record;
     }
-    return sync_ozone_error(status);
+    status = sync_ozone_error(status);
+    if (status != PLASIC_RUNTIME_OK)
+        return status;
+    if (mp_allreduce_real(warnings, 2) != 0)
+    {
+        runtime_set_error("could not summarize ozone forcing range across ranks");
+        return PLASIC_RUNTIME_NUMERICAL_FAILURE;
+    }
+    memcpy(forcing.cached_record, retained, sizeof(retained));
+    forcing.validated_low = low;
+    forcing.validated_high = high;
+    if (mp_is_root() && warnings[0] > 0)
+        fprintf(stderr, "External ozone exceeds 1e-4 kg/kg in the requested records; check units for Earth ozone.\n");
+    if (mp_is_root() && warnings[1] > 0)
+        fprintf(stderr, "External ozone below -1e-12 kg/kg was set to zero; check the input regridding.\n");
+    return PLASIC_RUNTIME_OK;
 }
 
 int runtime_ozone_forcing_apply(void)
@@ -484,7 +514,7 @@ int runtime_ozone_forcing_apply(void)
 
     if (forcing.file < 0)
         return PLASIC_RUNTIME_OK;
-    record = step_records(plasic_nstep, &neighbor, &weight);
+    record = step_records(plasic_nstep, plasic_ndatim, &neighbor, &weight);
     if (!covered(record))
     {
         runtime_set_error("ozone forcing '%s' does not cover model date %d-%02d",

@@ -369,7 +369,7 @@ ifneq ($(strip $(OZONE_FORCING)),)
 endif
 
 # Normal runs use the external forcing by default. Setting CO2_PPM switches
-# only `make run` to a spatially and temporally fixed concentration.
+# both `run` and `historical` to a spatially and temporally fixed concentration.
 ifneq ($(strip $(CO2_PPM)),)
   RUN_CO2_FLAG = --co2-ppm $(CO2_PPM)
 else
@@ -767,15 +767,17 @@ historical:
 		echo "Initial condition not found: $(INITIAL_CONDITION)" >&2; \
 		exit 2; \
 	}
+ifeq ($(strip $(CO2_PPM)),)
 	@test -f "$(CO2_FORCING)" || { \
 		echo "CO2 forcing not found: $(CO2_FORCING)" >&2; \
 		exit 2; \
 	}
+endif
 	$(MAKE) historical-run MPI=1 \
 		NLAT=$(HISTORICAL_NLAT) NLEV=$(HISTORICAL_NLEV) \
 		NPRO=$(HISTORICAL_NPRO) \
 		INITIAL_CONDITION="$(INITIAL_CONDITION)" \
-		CO2_FORCING="$(CO2_FORCING)" OZONE_FORCING="$(OZONE_FORCING)" \
+		CO2_PPM="$(CO2_PPM)" CO2_FORCING="$(CO2_FORCING)" OZONE_FORCING="$(OZONE_FORCING)" \
 		HISTORICAL_START_YEAR=$(HISTORICAL_START_YEAR) \
 		HISTORICAL_END_YEAR=$(HISTORICAL_END_YEAR) \
 		HISTORICAL_PROGRESS_INTERVAL=$(HISTORICAL_PROGRESS_INTERVAL) \
@@ -785,7 +787,7 @@ historical-run: all
 	@mkdir -p "$(HISTORICAL_OUTPUT_DIR)/monthly"
 	$(RUNNER) $(PROGRAM) \
 		--restart "$(INITIAL_CONDITION)" \
-		--co2-forcing "$(CO2_FORCING)" $(RUN_OZONE_FLAG) \
+		$(RUN_CO2_FLAG) $(RUN_OZONE_FLAG) \
 		--reset-nstep $(HISTORICAL_RESET_NSTEP) \
 		--steps $(HISTORICAL_STEPS) \
 		--monthly-output "$(HISTORICAL_OUTPUT_DIR)/monthly" \
@@ -820,8 +822,12 @@ test-serial-model:
 test-ozone: test-serial-model
 	cd .. && $(PYTHON) tests/ozone_forcing.py "$(ABS_BUILD_ROOT)/tests/ozone/plasic.x"
 
+$(BUILD_DIR)/ozone_retry: ../tests/ozone_retry.c $(RUNTIME_OBJECTS) $(LIBRARY)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $< \
+		$(filter-out $(BUILD_DIR)/app/plasic_standalone.o,$(RUNTIME_OBJECTS)) $(LIBRARY) $(LDLIBS)
+
 test-ozone-mpi:
-	$(MAKE) all MPI=1 NPRO=2 NLAT=32 NLEV=10 BUILD_DIR=$(BUILD_ROOT)/tests/ozone-mpi
+	$(MAKE) all $(BUILD_ROOT)/tests/ozone-mpi/ozone_retry MPI=1 NPRO=2 NLAT=32 NLEV=10 BUILD_DIR=$(BUILD_ROOT)/tests/ozone-mpi
 	cd .. && $(PYTHON) tests/ozone_forcing.py --mpi-model "$(ABS_BUILD_ROOT)/tests/ozone-mpi/plasic.x" --mpirun "$(MPIRUN)" -ktest_mpi
 
 test: test-data test-runtime test-ozone

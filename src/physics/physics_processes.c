@@ -47,22 +47,14 @@ double plasic_physics_ozone_column_du(size_t horizontal)
 static int report_external_ozone_column(void)
 {
     double weighted_column = 0.0;
-    float diagnostics[2] = {0.0f, 0.0f};
     for (size_t h = 0; h < PLASIC_NHOR; ++h)
         weighted_column += plasic_gwd[h / PLASIC_NLON] * plasic_physics_ozone_column_du(h);
-    for (size_t i = 0; i < (size_t)PLASIC_NLEV * PLASIC_NHOR; ++i)
-        if (radiation.ozone[i] > 1e-4)
-            diagnostics[1] = 1.0f;
-    diagnostics[0] = (float)(weighted_column / (2.0 * PLASIC_NLON));
-    if (mp_allreduce_real(diagnostics, 2) != 0)
+    float global_column = (float)(weighted_column / (2.0 * PLASIC_NLON));
+    if (mp_allreduce_real(&global_column, 1) != 0)
         return PLASIC_RUNTIME_NUMERICAL_FAILURE;
     if (mp_is_root())
-    {
         fprintf(stderr, "External ozone at first radiation step: global mean column = %.3f DU.\n",
-                (double)diagnostics[0]);
-        if (diagnostics[1] > 0.0f)
-            fprintf(stderr, "External ozone exceeds 1e-4 kg/kg in this step; check units for Earth ozone.\n");
-    }
+                (double)global_column);
     radiation.external_ozone_column_reported = 1;
     return PLASIC_RUNTIME_OK;
 }

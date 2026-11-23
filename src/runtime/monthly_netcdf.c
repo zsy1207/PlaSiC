@@ -196,8 +196,8 @@ static const monthly_definition definitions[] = {
     {"thetao", "sea_water_potential_temperature", "Sea water potential temperature", "K", SOURCE_THETAO, PLASIC_DEEP_NLEV, MASK_OCEAN},
     {"so", "sea_water_salinity", "Sea water salinity", "1e-3", SOURCE_SO, PLASIC_DEEP_NLEV, MASK_OCEAN},
     {"co2", "mole_fraction_of_carbon_dioxide_in_air", "Prescribed atmospheric carbon dioxide mole fraction", "1e-6", SOURCE_CO2, 1, MASK_NONE},
-    /* The optional prescribed column is last, so other runs retain their variable set. */
-    {"toz", "equivalent_thickness_at_stp_of_atmosphere_ozone_content", "Prescribed total ozone column in Dobson units", "1e-5 m", SOURCE_TOZ, 1, MASK_NONE}};
+    /* The last field requires an active radiation scheme. */
+    {"toz", "equivalent_thickness_at_stp_of_atmosphere_ozone_content", "Total ozone column in Dobson units", "1e-5 m", SOURCE_TOZ, 1, MASK_NONE}};
 
 /*
  * 三维海洋变量使用深海深度坐标轴，而不是大气 sigma 轴。
@@ -651,7 +651,7 @@ int runtime_monthly_netcdf_open(const char *directory)
         monthly_directory, sizeof(monthly_directory), "%s", directory);
 
     active_variable_count = MONTHLY_VARIABLE_COUNT;
-    if (!runtime_ozone_forcing_active() || plasic_nrad <= 0)
+    if (plasic_nrad <= 0)
         --active_variable_count;
 
     /* 高斯格点存的是纬度正弦值，这里还原为度数坐标。 */

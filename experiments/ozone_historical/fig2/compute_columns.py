@@ -11,7 +11,7 @@ from scipy.interpolate import RegularGridInterpolator
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from experiments.ozone_historical.common import RUNS, sha256
-from experiments.ozone_historical.prepare_ozone import finite, month_indices, sigma_edges
+from experiments.ozone_historical.prepare_ozone import area_weights, finite, month_indices, sigma_edges
 
 EXPERIMENT = Path(__file__).resolve().parents[1]
 # Hydrostatic column for a mole fraction integrated over Pa. Use PlaSiC's
@@ -68,6 +68,9 @@ def compute(data, reference, output):
                 # source grid. Matched columns use exactly the target ps.
                 raw_dp = [pressure_thickness(source, horizontal(p[::-1], lat[::-1], lon, sy, sx)) for p in ps]
                 matched_dp = [pressure_thickness(source, p) for p in ps]
+                conservative = getattr(model, 'horizontal_remapping', 'bilinear') == 'conservative'
+                if conservative:
+                    wy, wx = area_weights(source, lat, lon)
                 for i, date in enumerate(month_indices(source['time'])):
                     year, m = divmod(int(date), 12)
                     t = len(rows)
@@ -75,7 +78,13 @@ def compute(data, reference, output):
                         raise ValueError(f'{name}: mismatched month at record {i}')
                     raw = finite(source['vmro3'], i)
                     native = np.einsum('kij,kij->ij', raw, raw_dp[m]) * DU_PER_PA
-                    colocated = horizontal(raw.transpose(1, 2, 0), sy, sx, lat, lon).transpose(2, 0, 1)
+                    if conservative:
+                        colocated = (wy @ raw) @ wx.T
+                        # Every pressure level must retain its native global area mean.
+                        np.testing.assert_allclose(colocated.mean(axis=2) @ weights,
+                                                   (raw * area).sum(axis=(1, 2)), rtol=1e-12, atol=1e-18)
+                    else:
+                        colocated = horizontal(raw.transpose(1, 2, 0), sy, sx, lat, lon).transpose(2, 0, 1)
                     matched = np.einsum('kij,kij->ij', colocated, matched_dp[m]) * DU_PER_PA
                     model_column = np.einsum('k,kij->ij', dsigma, finite(model['o3'], t)) * ps[m] * DU_PER_PA
                     largest = np.max(np.abs(model_column - matched))
