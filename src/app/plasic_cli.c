@@ -30,6 +30,12 @@
 /*
  * Print command-line usage.
  */
+static void report_initialization_error(const char *message)
+{
+    fprintf(stderr, "PlaSiC initialization failed: %s\n", message);
+    fflush(stderr);
+}
+
 static void print_usage(FILE *stream, const char *program)
 {
     fprintf(stream,
@@ -565,25 +571,12 @@ int plasic_cli_run(int argc, char **argv)
         }
     }
 
-    /*
-     * PlaSiC runtime initialization
-     */
-    status = plasic_runtime_initialize_with_diagnostics(&options, stderr);
-
-    /*
-     * Runtime initialization failed.
-     */
+    status = plasic_runtime_initialize_with_diagnostic(&options, report_initialization_error);
     if (status != PLASIC_RUNTIME_OK)
-    {
         return EXIT_FAILURE;
-    }
 
     if (options.restart_input == NULL && plasic_mypid == 0)
-    {
-        fprintf(stderr, "No --restart given; performing a cold start from "
-                        "surface data in '%s'.\n",
-                options.surface_data_directory);
-    }
+        fprintf(stderr, "Cold start from surface data in '%s'.\n", options.surface_data_directory);
 
     /*
      * ================================================================

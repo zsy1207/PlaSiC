@@ -90,6 +90,7 @@ typedef struct rain_state
 typedef struct radiation_state
 {
     int32_t use_synthetic_ozone;
+    int32_t external_ozone_column_reported;
     int32_t shortwave;
     int32_t longwave;
     int32_t rayleigh_scattering;

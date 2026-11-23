@@ -156,7 +156,7 @@ static double units_factor(const char *units)
     }
     else if (strncmp(compact, "mol", 3) == 0)
     {
-        unit = "mol";
+        unit = strncmp(compact, "mole", 4) == 0 ? "mole" : "mol";
         factor = 47.9982 / 28.9644;
     }
     else
@@ -246,7 +246,7 @@ static int read_header(void)
     if (!read_units())
     {
         runtime_set_error("ozone forcing o3 units must be 'kg kg-1' or 'mol mol-1' "
-                          "(also written 'kg/kg', 'kg kg**-1', 'mol/mol' ...) in '%s'",
+                          "(also written 'kg/kg', 'kg kg**-1', 'mol/mol', 'mole mole-1', 'mole/mole' ...) in '%s'",
                           forcing.source);
         return 0;
     }
@@ -257,6 +257,16 @@ static int read_header(void)
         return 0;
     }
     return 1;
+}
+
+static int sync_ozone_error(int32_t status)
+{
+    if (mp_sync_error(&status, runtime_error_message, sizeof(runtime_error_message)) != 0)
+    {
+        runtime_set_error("could not synchronize ozone forcing error");
+        return PLASIC_RUNTIME_NUMERICAL_FAILURE;
+    }
+    return status;
 }
 
 static int open_local_file(const char *path)
@@ -318,12 +328,12 @@ static int check_shared_time_axis(void)
                           mp_rank(), local[0], local[1], local[2], root[0], root[1], root[2]);
         status = PLASIC_RUNTIME_BAD_ARGUMENT;
     }
-    return runtime_sync_error(status);
+    return sync_ozone_error(status);
 }
 
 int runtime_ozone_forcing_open(const char *path)
 {
-    int status = runtime_sync_error(open_local_file(path));
+    int status = sync_ozone_error(open_local_file(path));
     if (status == PLASIC_RUNTIME_OK)
         status = check_shared_time_axis();
     if (status != PLASIC_RUNTIME_OK)
@@ -380,7 +390,7 @@ static int cached_month(int64_t record, const double **values)
     if (forcing.cached_record[slot] != record)
     {
         forcing.cached_record[slot] = -1;
-        const int status = runtime_sync_error(read_month(record, slab));
+        const int status = sync_ozone_error(read_month(record, slab));
         if (status != PLASIC_RUNTIME_OK)
             return status;
         forcing.cached_record[slot] = record;
@@ -442,14 +452,16 @@ int runtime_ozone_forcing_validate(int32_t steps)
     /* Interpolation reaches one record beyond the run only at its two ends. */
     const int64_t low = first_neighbor < first && covered(first_neighbor) ? first_neighbor : first;
     const int64_t high = last_neighbor > last && covered(last_neighbor) ? last_neighbor : last;
-    for (int64_t record = low; record <= high; ++record)
+    /* Validate local slabs before a single collective. Reverse order retains
+     * the first interpolation pair in the cache when integration starts. */
+    int status = PLASIC_RUNTIME_OK;
+    for (int64_t record = high; record >= low && status == PLASIC_RUNTIME_OK; --record)
     {
-        const double *values;
-        const int status = cached_month(record, &values);
-        if (status != PLASIC_RUNTIME_OK)
-            return status;
+        const int slot = (int)(record % 2);
+        status = read_month(record, forcing.slabs + (size_t)slot * local_values);
+        forcing.cached_record[slot] = status == PLASIC_RUNTIME_OK ? record : -1;
     }
-    return PLASIC_RUNTIME_OK;
+    return sync_ozone_error(status);
 }
 
 int runtime_ozone_forcing_apply(void)

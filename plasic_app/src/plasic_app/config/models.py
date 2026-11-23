@@ -289,8 +289,6 @@ class RunConfig:
         "gn-15x360deg_000001-201412.csv"
     )
 
-    ozone_forcing: str = ""
-
     restart: str = ""
 
     data_dir: str = "data/surface"
@@ -307,6 +305,8 @@ class RunConfig:
     # Atmosphere-sea ice coupling interval: sea ice and the ocean run once
     # every this many atmospheric steps; the default 1 couples every step.
     sea_coupling_interval: int = 1
+
+    ozone_forcing: str = ""
 
     def validate(self) -> list[str]:
         """

@@ -69,6 +69,7 @@ static void initialize_radiation(void)
     const float beta = sqrtf(1.0f - eccentricity_squared);
 
     radiation.use_synthetic_ozone = 1;
+    radiation.external_ozone_column_reported = 0;
     radiation.shortwave = 1;
     radiation.longwave = 1;
     radiation.rayleigh_scattering = 1;
@@ -613,16 +614,6 @@ void physics_interpolate_ocean_climatology(void)
  */
 void physics_interpolate_land_surface(void);
 
-static int sync_initialization_error(int32_t status)
-{
-    if (mp_sync_error(&status, physics_error_message, sizeof(physics_error_message)) != 0)
-    {
-        physics_set_error("could not synchronize physics initialization status");
-        return PLASIC_RUNTIME_NUMERICAL_FAILURE;
-    }
-    return status;
-}
-
 static int initialize_cold_start_physics(void)
 {
     const size_t plane = (size_t)PLASIC_NUGP;
@@ -736,12 +727,7 @@ static int initialize_cold_start_physics(void)
         (float *)malloc(plane * PLASIC_CLIMATOLOGY_MONTHS * sizeof(float));
     if (global_cover == NULL || global_thickness == NULL)
     {
-        physics_set_error("could not allocate cold-start ice climatology fields");
         status = PLASIC_RUNTIME_INITIALIZATION_FAILED;
-    }
-    status = sync_initialization_error(status);
-    if (status != PLASIC_RUNTIME_OK)
-    {
         goto done;
     }
     for (month = 0; month < PLASIC_CLIMATOLOGY_MONTHS; ++month)
@@ -936,18 +922,14 @@ int physics_initialize(
     const char *restart_path, const char *surface_data_directory,
     int32_t sea_coupling_interval)
 {
-    int status = PLASIC_RUNTIME_OK;
+    int status;
 
     physics_error_message[0] = '\0';
     work = (physics_workspace *)calloc(1, sizeof(*work));
     if (work == NULL)
     {
-        physics_set_error("could not allocate physics workspace");
-        status = PLASIC_RUNTIME_INITIALIZATION_FAILED;
+        return PLASIC_RUNTIME_INITIALIZATION_FAILED;
     }
-    status = sync_initialization_error(status);
-    if (status != PLASIC_RUNTIME_OK)
-        return status;
     (void)initialize_misc();
     initialize_flux();
     initialize_rain();
@@ -957,15 +939,18 @@ int physics_initialize(
     /* A run option, not a restart record: each run may choose its own. */
     sea.coupling_interval = sea_coupling_interval;
     status = load_physics_restart(restart_path);
-    if (status == PLASIC_RUNTIME_OK && restart_path == NULL)
-        status = load_surface_initialization(surface_data_directory);
-    /* Cold-start ice gathers and warm-start ocean halo exchanges follow. */
-    status = sync_initialization_error(status);
     if (status != PLASIC_RUNTIME_OK)
+    {
         return status;
+    }
     if (restart_path == NULL)
     {
-        status = sync_initialization_error(initialize_cold_start_physics());
+        status = load_surface_initialization(surface_data_directory);
+        if (status != PLASIC_RUNTIME_OK)
+        {
+            return status;
+        }
+        status = initialize_cold_start_physics();
         if (status != PLASIC_RUNTIME_OK)
         {
             return status;

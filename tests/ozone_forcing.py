@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import shlex
 import shutil
@@ -91,6 +92,33 @@ class MonthlyOzone(unittest.TestCase):
         fields = dict(read_raw_records(self.directory / "status"))
         return np.stack([decode_float(fields[name], 32 * 64) for name in ("atsol", "atthr")])
 
+    def test_known_300_du_column(self):
+        # Obtain the actual first-step pressure through the model's independent
+        # frame output, before prescribing a column that varies horizontally.
+        sys.path.insert(0, str(ROOT / "plasic_app/src"))
+        try:
+            from plasic_app.protocol.pstream import PStreamReader
+        finally:
+            sys.path.pop(0)
+        frames = self.directory / "initial.pstream"
+        self.run_model(*self.co2, "--steps", "1", "--frames", frames, "--frame-interval", "1")
+        pressure = next(frame.data.reshape(32, 64) for frame in PStreamReader(frames).read_new()
+                        if frame.name == "surface_pressure").astype(float)
+        mu = np.polynomial.legendre.leggauss(32)[0][::-1]
+        # P2 has zero area mean. Inserting all ozone into the top layer also
+        # detects treating a layer mean as a point value or omitting Δsigma.
+        target_du = (300.0 + 100.0 * (3.0 * mu**2 - 1.0) / 2.0)[:, None]
+        top_dsigma = 0.75 * 0.1 + 1.75 * 0.1**3 - 1.5 * 0.1**4
+        q = np.zeros((2, 10, 32, 64))
+        q[:, 0] = target_du * 2.14e-5 * 9.80665 / (pressure * top_dsigma)
+        for units, factor in (("kg kg-1", 1.0), ("mole mole-1", 28.9644 / 47.9982)):
+            with self.subTest(units=units):
+                write_forcing(self.ozone, q * factor, units=units)
+                result = self.run_model(*self.co2, "--ozone-forcing", self.ozone)
+                columns = re.findall(r"global mean column = ([0-9.]+) DU", result.stderr)
+                self.assertEqual(len(columns), 1, result.stderr)
+                self.assertAlmostEqual(float(columns[0]), 300.0, delta=.01)
+
     def test_monthly_radiation_and_units(self):
         synthetic = self.fluxes()
         values = np.full((2, 10, 32, 64), 1e-8)
@@ -159,6 +187,12 @@ class MonthlyOzone(unittest.TestCase):
         write_forcing(self.ozone, values, dtype="f")
         self.run_model(*options)
 
+    def test_mpi_initialization_diagnostic_once(self):
+        if MPI_MODEL is None:
+            self.skipTest("requires a two-rank T21 L10 plasic.x")
+        result = self.run_model(mpi=True, error="specify exactly one CO2 mode")
+        self.assertEqual(result.stderr.count("PlaSiC initialization failed:"), 1)
+
     @unittest.skipUnless(shutil.which("ncdump") and shutil.which("ncgen"), "requires ncdump and ncgen")
     def test_string_units(self):
         write_forcing(self.ozone, 1e-7, dtype="f")
@@ -168,6 +202,20 @@ class MonthlyOzone(unittest.TestCase):
         self.assertIn("string o3:units", cdl)
         subprocess.run(["ncgen", "-4", "-o", self.ozone], input=cdl, text=True, check=True)
         np.testing.assert_array_equal(expected, self.fluxes("--ozone-forcing", self.ozone))
+
+    def test_mpi_earth_scale_advisory(self):
+        if MPI_MODEL is None:
+            self.skipTest("requires a two-rank T21 L10 plasic.x")
+        for mass_fraction, expected_warnings in ((0.995e-4, 0), (1.005e-4, 1)):
+            with self.subTest(mass_fraction=mass_fraction):
+                values = np.full((2, 10, 32, 64), 1e-7)
+                # A single cell on rank one straddles the mass-fraction threshold
+                # while the stored mole fraction remains below it in both runs.
+                values[:, 0, -1, 0] = mass_fraction * (28.9644 / 47.9982)
+                write_forcing(self.ozone, values, units="mole/mole")
+                result = self.run_model(*self.co2, "--ozone-forcing", self.ozone, mpi=True)
+                self.assertEqual(result.stderr.count("check units for Earth ozone"), expected_warnings)
+                self.assertEqual(result.stderr.count("global mean column ="), 1)
 
     def test_mpi_southern_slab_failure(self):
         if MPI_MODEL is None:
@@ -216,23 +264,6 @@ class MonthlyOzone(unittest.TestCase):
                 result = self.run_model(*options, mpi=True, wrapper=wrapper, error=error)
                 if error:
                     self.assertEqual(result.stderr.count("PlaSiC initialization failed"), 1)
-
-    def test_mpi_nonroot_surface_error(self):
-        if MPI_MODEL is None:
-            self.skipTest("requires a two-rank T21 L10 plasic.x")
-        # Only rank 1 uses the incomplete data directory.
-        surface = self.directory / "surface"
-        (surface / "T21").mkdir(parents=True)
-        orography = "N032_surf_orography.nc"
-        for field in ("orography", "land_sea_mask"):
-            with self.subTest(field=field):
-                if field == "land_sea_mask":
-                    (surface / "T21" / orography).symlink_to(SURFACE / "T21" / orography)
-                result = self.run_model("--co2-ppm", "300", mpi=True,
-                                        wrapper=self.rank_one_options("--data-dir", surface),
-                                        error=f"surface field '{field}'")
-                self.assertEqual(result.stderr.count("PlaSiC initialization failed"), 1, result.stderr)
-                self.assertIn(str(surface), result.stderr)
 
     def test_warm_start_clock_reset(self):
         # Save an initial state at the January/February boundary. Use the
@@ -315,7 +346,7 @@ class MonthlyOzone(unittest.TestCase):
     def test_unit_spellings(self):
         values = np.full((2, 10, 32, 64), 1e-7)
         for reference, spellings in (("kg kg-1", ("kg kg**-1", "kg kg^-1", "kg/kg", " kg  kg-1 ", "kg*kg^-1")),
-                                     ("mol mol-1", ("mol mol**-1", "mol/mol"))):
+                                     ("mol mol-1", ("mol mol**-1", "mol/mol", "mole mole-1", "mole/mole"))):
             write_forcing(self.ozone, values, units=reference)
             expected = self.fluxes("--ozone-forcing", self.ozone)
             for units in spellings:

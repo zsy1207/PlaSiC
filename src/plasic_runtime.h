@@ -4,7 +4,6 @@
 #include "plasic_status.h"
 
 #include <stdint.h>
-#include <stdio.h>
 
 typedef struct plasic_runtime_options
 {
@@ -42,8 +41,9 @@ typedef struct plasic_runtime_options
 } plasic_runtime_options;
 
 int plasic_runtime_initialize(const plasic_runtime_options *options);
-/* Report initialization failures on rank zero before shutting down MPI. */
-int plasic_runtime_initialize_with_diagnostics(const plasic_runtime_options *options, FILE *stream);
+/* Like initialize(), with a root-only error callback before MPI and I/O teardown. */
+int plasic_runtime_initialize_with_diagnostic(
+    const plasic_runtime_options *options, void (*on_error)(const char *message));
 int plasic_runtime_run(const plasic_runtime_options *options);
 int plasic_runtime_write_restart(const char *path);
 void plasic_runtime_finalize(void);

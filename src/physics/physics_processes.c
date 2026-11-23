@@ -33,6 +33,37 @@ static void orbital_declination(
     *distance_factor = inverse_distance * inverse_distance;
 }
 
+/* Report the field passed to the first radiation calculation with the actual
+ * surface pressure. Gaussian latitude weights sum to two globally. */
+static int report_external_ozone_column(void)
+{
+    double weighted_mass = 0.0;
+    float diagnostics[2] = {0.0f, 0.0f};
+    for (int k = 0; k < PLASIC_NLEV; ++k)
+    {
+        for (int h = 0; h < PLASIC_NHOR; ++h)
+        {
+            const double q = radiation.ozone[(size_t)k * PLASIC_NHOR + (size_t)h];
+            weighted_mass += plasic_gwd[h / PLASIC_NLON] * plasic_dp[h] * plasic_dsigma[k] * q;
+            if (q > 1e-4)
+                diagnostics[1] = 1.0f;
+        }
+    }
+    /* 1 DU is a 10 micrometre column of ozone at STP; PlaSiC uses 2.14 kg/m3. */
+    diagnostics[0] = (float)(weighted_mass / (2.0 * PLASIC_NLON * plasic_ga * 2.14e-5));
+    if (mp_allreduce_real(diagnostics, 2) != 0)
+        return PLASIC_RUNTIME_NUMERICAL_FAILURE;
+    if (mp_is_root())
+    {
+        fprintf(stderr, "External ozone at first radiation step: global mean column = %.3f DU.\n",
+                (double)diagnostics[0]);
+        if (diagnostics[1] > 0.0f)
+            fprintf(stderr, "External ozone exceeds 1e-4 kg/kg in this step; check units for Earth ozone.\n");
+    }
+    radiation.external_ozone_column_reported = 1;
+    return PLASIC_RUNTIME_OK;
+}
+
 static int radiation_step(void)
 {
     float calendar_day;
@@ -76,6 +107,12 @@ static int radiation_step(void)
         {
             return PLASIC_RUNTIME_NUMERICAL_FAILURE;
         }
+    }
+    else if (radiation.external_ozone_column_reported == 0)
+    {
+        status = report_external_ozone_column();
+        if (status != PLASIC_RUNTIME_OK)
+            return status;
     }
     if (radiation.shortwave != 0)
     {
