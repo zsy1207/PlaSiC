@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 import netCDF4 as nc
 import numpy as np
 
@@ -78,9 +79,24 @@ class HistoricalAnalysis(unittest.TestCase):
             self.assertEqual('--co2-ppm' in cmd, case == 'ozone_only')
             self.assertEqual('--co2-forcing' in cmd, case != 'ozone_only')
             self.assertIn('--ozone-forcing', cmd)
+            self.assertEqual(cmd[cmd.index('--step-minutes') + 1], '45')
         cmd = runner.command(Path('/model'), Path('/ic'), Path('/o3'), Path('/out'),
                              'co2_only', mpirun='srun -n 2')
         self.assertEqual(cmd[:4], ['srun', '-n', '2', '/model'])
+
+    def test_historical_clock_with_archived_and_current_executables(self):
+        with patch.object(runner.subprocess, 'check_output') as help_text:
+            for usage, expected in (('--ozone-forcing FILE', ()),
+                                    ('--ozone-forcing FILE --step-minutes M', ('--step-minutes', '45'))):
+                with self.subTest(usage=usage):
+                    help_text.return_value = usage
+                    self.assertEqual(runner.historical_clock('/model'), expected)
+                    cmd = runner.command('/model', '/ic', '/o3', Path('/out'), 'ozone_only', clock=expected)
+                    self.assertEqual('--step-minutes' in cmd, bool(expected))
+                    self.assertEqual(cmd[cmd.index('--steps') + 1], '1928480')
+            help_text.return_value = '--steps N'
+            with self.assertRaisesRegex(ValueError, 'external ozone'):
+                runner.historical_clock('/model')
 
     def test_gregorian_centuries(self):
         self.assertEqual(runner.year_start(1850), 21622368)

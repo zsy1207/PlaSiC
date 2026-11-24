@@ -75,7 +75,7 @@ class MonthlyOzone(unittest.TestCase):
         if mpi and os.geteuid() == 0:
             env.update(OMPI_ALLOW_RUN_AS_ROOT="1", OMPI_ALLOW_RUN_AS_ROOT_CONFIRM="1")
         result = subprocess.run(
-            [*command, "--config", self.config, *extra],
+            [*command, "--config", self.config, "--step-minutes", "45", *extra],
             capture_output=True, text=True, timeout=120, env=env,
         )
         if error is None:

@@ -15,7 +15,9 @@ import shlex
 import subprocess
 import time
 
-STEPS_PER_DAY = 32
+STEP_MINUTES = 45
+STEPS_PER_DAY = 1440 // STEP_MINUTES
+HISTORICAL_CLOCK = ('--step-minutes', str(STEP_MINUTES))
 DEFAULT_LAUNCHER = 'mpirun --bind-to none -np 2'
 CHECKPOINT_FILES = ('final.restart', 'monthly/tas.nc')
 ROOT = Path(__file__).resolve().parents[2]
@@ -34,11 +36,20 @@ def year_start(year):
     return (365 * year + leap_days) * STEPS_PER_DAY
 
 
-def command(model, restart, ozone, directory, case, end_year=2014, mpirun=DEFAULT_LAUNCHER, first_year=1850):
+def historical_clock(model):
+    """Pre-override T21 builds used 45 minutes; newer builds need an explicit step."""
+    usage = subprocess.check_output([model, '--help'], text=True)
+    if '--ozone-forcing' not in usage:
+        raise ValueError(f'{model}: monthly external ozone support is required')
+    return HISTORICAL_CLOCK if '--step-minutes' in usage else ()
+
+
+def command(model, restart, ozone, directory, case, end_year=2014, mpirun=DEFAULT_LAUNCHER,
+            first_year=1850, *, clock=HISTORICAL_CLOCK):
     steps = year_start(end_year + 1) - year_start(first_year)
     result = [*shlex.split(mpirun), str(model),
               '--restart', str(restart),
-              '--steps', str(steps), '--ozone-forcing', str(ozone),
+              '--steps', str(steps), *clock, '--ozone-forcing', str(ozone),
               '--monthly-output', str(directory / 'monthly'),
               '--progress', str(directory / 'progress.jsonl'), '--progress-interval', '3200',
               '--output', str(directory / 'final.restart')]
@@ -100,7 +111,7 @@ def segment(args, case, year, inputs):
     # The next year may consume this restart only after all monthly files pass validation.
     directory = Path(mkdtemp(prefix=f'.{year}-', dir=case_dir))
     (directory / 'monthly').mkdir()
-    cmd = command(args.model, restart, ozone, directory, case, year, args.mpirun, year)
+    cmd = command(args.model, restart, ozone, directory, case, year, args.mpirun, year, clock=args.clock)
     manifest = dict(command=cmd, signature=signature, cwd=str(ROOT / 'src'), start_unix=time.time())
     (directory / 'run.json').write_text(json.dumps(manifest, indent=2))
     with (directory / 'run.log').open('w') as log:
@@ -131,6 +142,7 @@ def run(args):
     for p in (args.model, args.restart, args.historical_ozone, args.fixed_ozone, CO2):
         if not p.is_file():
             raise FileNotFoundError(p)
+    args.clock = historical_clock(args.model)
     for path, expected in ((args.historical_ozone, 'historical 1850-2014'),
                            (args.fixed_ozone, 'repeated 1850 seasonal cycle')):
         with nc.Dataset(path) as ds:

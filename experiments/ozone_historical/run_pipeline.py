@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if not __package__:
     sys.path.insert(0, str(ROOT))
 from experiments.ozone_historical.common import RUNS, sha256
-from experiments.ozone_historical.run_experiments import DEFAULT_LAUNCHER, lock_run, year_start
+from experiments.ozone_historical.run_experiments import DEFAULT_LAUNCHER, historical_clock, lock_run, year_start
 
 HERE = Path(__file__).resolve().parent
 ESGF = ('https://esgf-node.ornl.gov/thredds/fileServer/user_pub_work/input4MIPs/'
@@ -61,7 +61,8 @@ def prepare_inputs(args, data, run):
         with TemporaryDirectory(dir=data) as work:
             staging = Path(work) / 'reference'
             (staging / 'monthly').mkdir(parents=True)
-            run(*shlex.split(args.mpirun), model, '--restart', INITIAL, '--co2-ppm', '284.316853',
+            run(*shlex.split(args.mpirun), model, '--restart', INITIAL, *historical_clock(model),
+                '--co2-ppm', '284.316853',
                 '--reset-nstep', str(year_start(1850)), '--steps', str(year_start(1851) - year_start(1850)),
                 '--monthly-output', staging / 'monthly', '--output', staging / 'final.restart')
             staging.rename(reference)

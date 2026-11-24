@@ -22,7 +22,7 @@ Run from the repository root. The pipeline verifies the four ESGF checksums, bui
 python experiments/ozone_historical/run_pipeline.py --jobs 2
 ```
 
-The default download and output directories are `experiments/ozone_historical/data` and `experiments/ozone_historical/runs`. Use `--data` and `--output` to choose another disk. `--model` reuses an existing two-rank executable. `--reference-ps` reuses an existing twelve-month pressure file. The default pressure reference is the first Gregorian year from `icA.restart` with idealized ozone, fixed 1850 CO₂ and 32 steps per day. All three historical experiments reuse this monthly pressure climatology.
+The default download and output directories are `experiments/ozone_historical/data` and `experiments/ozone_historical/runs`. Use `--data` and `--output` to choose another disk. `--model` reuses an existing two-rank executable. `--reference-ps` reuses an existing twelve-month pressure file. The runner and reference-pressure calculation both select a 45-minute time step. With current builds they pass `--step-minutes 45`, overriding the general T21 default of 30 minutes. The archived T21 executable predates the option and uses 45 minutes by default. The default pressure reference is the first Gregorian year from `icA.restart` with idealized ozone, fixed 1850 CO₂ and 32 steps per day. All three historical experiments reuse this monthly pressure climatology.
 
 The individual stages can also be run separately. The [converter](prepare_ozone.py) takes the four UReading files, `--reference-ps` and `--output`. Add `--fixed-1850` for the repeating seasonal cycle. The [experiment runner](run_experiments.py) accepts `--historical-ozone` and `--fixed-ozone`. The [temperature analysis](fig1/compute_temperature.py) and [plot](fig1/plot_temperature.py) read completed runs from `PLASIC_OZONE_RUNS`.
 
@@ -81,6 +81,8 @@ For the archived atmospheric temperature field `ta`, the analysis averages the t
 
 Each trajectory covers January 1850 through December 2014. Anomalies use the corresponding case’s 1850–1900 mean. The table uses the model’s near-surface air temperature diagnostic (`tas`). The production runs used 45-minute time steps (32 steps per day), as did the published reference experiment. [Production revision](https://github.com/zsy1207/PlaSiC/commit/6f71e172f539831f66e29737e60057854f888dc9) · [Upstream time-step update made during the runs](https://github.com/sunmoumou1/PlaSiC/commit/9568fa9fdd6ffb4e5a9c4a811b0e4e8216a2c5de)
 
+After the upstream time-step update, the rebuilt model replayed the combined case for 1850 from the common initial state and the ozone-only case for 2014 from its archived end-of-2013 restart. At 45 minutes, all 30 monthly NetCDF files and the final restart were byte-identical to the production archive in each year.
+
 | Experiment | 1850–1900 mean (K) | 2005–2014 mean anomaly (K) | 2014 anomaly (K) |
 |---|---:|---:|---:|
 | CO₂ + ozone | 286.545 | +0.697 | +0.678 |
@@ -97,7 +99,7 @@ Thin curves show all 165 annual values. Thick curves show complete centred nine-
 make -C src test-data test-ozone test-ozone-mpi
 ```
 
-To test the annual restart boundary, run `python experiments/ozone_historical/verify_restart.py` after completing the combined case through 1851. It replays both years continuously with the recorded inputs and checks every stored monthly array and the complete binary end restart against the two annual segments. Set `PLASIC_OZONE_RUNS` or pass `--output` to select the archive. With the actual joint-forcing inputs, the 23,360-step continuous 1850–1851 integration matched both segmented years across 29 monthly files and all 132 records of the binary end restart (SHA256 `60aa925ca8f1dd2b6380d663ec30801fb84f77589f9a0437f2f2c576c354b269`).
+To test the annual restart boundary, run `python experiments/ozone_historical/verify_restart.py` after completing the combined case through 1851. It replays both years continuously with the recorded inputs and checks every stored monthly array and the complete binary end restart against the two annual segments. Set `PLASIC_OZONE_RUNS` or pass `--output` to select the archive. With the actual joint-forcing inputs, the 23,360-step continuous 1850–1851 integration matched both segmented years across 30 monthly files and all 132 records of the binary end restart (SHA256 `05788b87649ebc2ebc107633561ffea67b8d54db78770f5bc3b41fed93feccaf`).
 
 Both ozone schemes write `monthly/toz.nc` with active radiation. This field integrates the ozone mass in each layer using the instantaneous surface pressure, then averages the column over all steps in a complete calendar month. The stored unit of $10^{-5}$ m at STP equals one Dobson unit. Each file records the ozone source. For synthetic ozone the independent January 1850 check reproduced all 2,048 grid cells within 0.00065 DU. Its area-weighted monthly mean was 305.0429 DU. A separate external-field test prescribes a global mean of 300 DU.
 

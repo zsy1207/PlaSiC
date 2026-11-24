@@ -70,7 +70,11 @@ def main(args):
     with TemporaryDirectory() as tmp:
         directory = Path(tmp)
         (directory / 'monthly').mkdir()
-        cmd = command(model, restart, ozone, directory, 'co2_ozone', 1851, args.mpirun)
+        # Recover the exact clock arguments from the original segmented run.
+        clock = ()
+        if '--step-minutes' in argv:
+            clock = ('--step-minutes', argv[argv.index('--step-minutes') + 1])
+        cmd = command(model, restart, ozone, directory, 'co2_ozone', 1851, args.mpirun, clock=clock)
         cmd[cmd.index('--co2-forcing') + 1] = str(co2)
         subprocess.run(cmd, cwd=ROOT / 'src', check=True)
         return compare(directory, first, second)
