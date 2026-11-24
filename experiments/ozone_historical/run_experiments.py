@@ -75,11 +75,14 @@ def lock_run(output):
         yield
 
 
-def checkpoint_files(directory):
+def checkpoint_files(directory, *, require_toz=True):
     monthly = sorted(p.relative_to(directory).as_posix() for p in (directory / 'monthly').glob('*.nc'))
     required = {'monthly/' + name + '.nc' for name in ('tas', 'ta', 'co2', 'thetao', 'rsdt', 'rsut', 'rlut')}
-    if not required.issubset(monthly):
-        raise ValueError(f'{directory}: missing monthly model diagnostics')
+    if require_toz:
+        required.add('monthly/toz.nc')
+    missing = required.difference(monthly)
+    if missing:
+        raise ValueError(f'{directory}: missing monthly model diagnostics: {", ".join(sorted(missing))}')
     return ('final.restart', *monthly)
 
 
@@ -99,9 +102,10 @@ def segment(args, case, year, inputs):
             raise ValueError(f'{destination}: inputs differ from completed segment')
         checksums = previous.get('output_sha256')
         version = previous.get('checkpoint_version', 1)
-        if version not in (1, 2):
+        if version not in (1, 2, 3):
             raise ValueError(f'{destination}: unsupported checkpoint version {version}')
-        files = CHECKPOINT_FILES if version == 1 else checkpoint_files(destination)
+        # Version 2 also covers older builds that did not output an ozone column.
+        files = CHECKPOINT_FILES if version == 1 else checkpoint_files(destination, require_toz=version == 3)
         if not isinstance(checksums, dict) or checksums.keys() != set(files):
             raise ValueError(f'{destination}: expected checksums for {", ".join(files)}')
         for name in files:
@@ -131,7 +135,7 @@ def segment(args, case, year, inputs):
             raise ValueError(f'{tas}: incorrect CO₂ forcing source {ds.co2_forcing_source}')
         if ds.ozone_forcing_source != str(ozone):
             raise ValueError(f'{tas}: incorrect ozone forcing source')
-    manifest.update(checkpoint_version=2, finish_unix=time.time(), annual_tas_K=float(temperatures[0]),
+    manifest.update(checkpoint_version=3, finish_unix=time.time(), annual_tas_K=float(temperatures[0]),
                     output_sha256={f: digest(directory / f) for f in checkpoint_files(directory)})
     (directory / 'run.json').write_text(json.dumps(manifest, indent=2))
     directory.rename(destination)

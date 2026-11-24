@@ -125,7 +125,7 @@ class HistoricalAnalysis(unittest.TestCase):
                     result = analysis.annual_temperature(path, year, year)[1][0]
                     self.assertAlmostEqual(result, 280 + 10 * feb_days / (337 + feb_days), places=11)
 
-    def test_resume_requires_both_checkpoint_checksums(self):
+    def test_checkpoint_files_and_resume_across_versions(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             case = 'co2_ozone'
@@ -154,6 +154,29 @@ class HistoricalAnalysis(unittest.TestCase):
                 hashes[rel] = runner.digest(directory / rel)
             manifest.write_text(json.dumps(dict(signature=signature, checkpoint_version=2, output_sha256=hashes)))
             runner.segment(args, case, 1850, {})
+
+            # The current writer must refuse to sign a year without the ozone column.
+            with self.assertRaisesRegex(ValueError, 'missing .*monthly/toz.nc'):
+                runner.checkpoint_files(directory)
+            manifest.write_text(json.dumps(dict(signature=signature, checkpoint_version=3, output_sha256=hashes)))
+            with self.assertRaisesRegex(ValueError, 'missing .*monthly/toz.nc'):
+                runner.segment(args, case, 1850, {})
+
+            column = directory / 'monthly/toz.nc'
+            column.write_bytes(b'ozone column')
+            self.assertIn('monthly/toz.nc', runner.checkpoint_files(directory))
+            with self.assertRaisesRegex(ValueError, 'expected checksums'):
+                runner.segment(args, case, 1850, {})
+            hashes['monthly/toz.nc'] = runner.digest(column)
+            for version in (2, 3):
+                with self.subTest(version=version):
+                    column.write_bytes(b'ozone column')
+                    manifest.write_text(json.dumps(dict(signature=signature, checkpoint_version=version, output_sha256=hashes)))
+                    runner.segment(args, case, 1850, {})
+                    column.write_bytes(b'damaged')
+                    with self.assertRaisesRegex(ValueError, 'toz.nc: checksum changed'):
+                        runner.segment(args, case, 1850, {})
+            column.write_bytes(b'ozone column')
             (directory / 'monthly/thetao.nc').write_text('damaged')
             with self.assertRaisesRegex(ValueError, 'thetao.nc: checksum changed'):
                 runner.segment(args, case, 1850, {})
