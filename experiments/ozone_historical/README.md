@@ -56,7 +56,7 @@ The figure averages the prescribed column over longitudes and over the 165 occur
 - At fixed October reference pressure south of 60°S, monthly averaging of the interpolated fields raises the mean annual October spatial minimum by 9.76% over 2000–2014. The corresponding increase in the polar-cap area mean is 1.80%. The October 16 midnight field uses the original anchor.
 - In a 60-month sensitivity comparison, switching between bilinear sampling and area-conservative horizontal remapping changed the global column by at most 0.018 DU and individual cells by up to 3.70 DU. In the preliminary bilinear calculation, substituting a ten-year monthly pressure climatology from the CO₂-only case changed global columns by up to 0.080 DU and individual cells by up to 6.30 DU. These are offline sensitivities, with both methods evaluated at a common pressure in each comparison.
 - The L10 top layer contains 74.6–81.0% of the global ozone column over the 1,980 months. Across all months, using layer-midpoint pressure in the longwave calculation overestimates the top-layer pressure-weighted ozone path by 42.9–48.8% and the full-column path by 11.1–15.5%. These percentages describe the optical-path approximation. They do not quantify the resulting flux or temperature errors.
-- In the preliminary bilinear runs, the 1851–1860 mean top-of-atmosphere net downward radiation and full-depth ocean heat storage had opposite signs in all three cases. Their differences are approximately +3.99, +4.72 and +4.03 W m⁻² for CO₂ + ozone, ozone only and CO₂ only. A matched one-year reference with idealized ozone also showed this sign difference. This partial budget excludes other reservoirs.
+- In 1851–1860, the global mean net downward top-of-atmosphere flux minus full-depth ocean heat storage was +4.86, +4.31, +4.23 W m⁻² for the combined, ozone-only and CO₂-only runs, respectively. This partial budget excludes storage in other reservoirs. A one-year reference with idealized ozone also showed net downward top-of-atmosphere flux and decreasing ocean heat content.
 
 ## Instantaneous radiation diagnostic
 
@@ -77,7 +77,21 @@ Use the model’s near-surface air temperature (`tas`), Gaussian quadrature in l
 
 For the archived atmospheric temperature field `ta`, the analysis averages the top layer (σ = 0 to 0.0766) south of 60°S over September–November. Gaussian latitude-band areas are clipped at 60°S and months are weighted by duration. The CSV gives annual spring values, and the summary compares 1960–1979, 1980–1999 and 2000–2014 and reports the 1980–2014 linear slope. This is a layer-mean temperature diagnostic for one model realization. The reference historical plotting code and these calculations agree on annual weighting and the full nine-year windows. [Reference plotting script](../historical_3d_500y/plots/plot_historical_surface_temperature.py)
 
-Final results require 165 complete years from each case.
+## Historical temperature results
+
+Each trajectory covers January 1850 through December 2014. Anomalies use the corresponding case’s 1850–1900 mean. The table uses the model’s near-surface air temperature diagnostic (`tas`). The production runs used 45-minute time steps (32 steps per day), as did the published reference experiment. [Production revision](https://github.com/zsy1207/PlaSiC/commit/6f71e172f539831f66e29737e60057854f888dc9) · [Upstream time-step update made during the runs](https://github.com/sunmoumou1/PlaSiC/commit/9568fa9fdd6ffb4e5a9c4a811b0e4e8216a2c5de)
+
+| Experiment | 1850–1900 mean (K) | 2005–2014 mean anomaly (K) | 2014 anomaly (K) |
+|---|---:|---:|---:|
+| CO₂ + ozone | 286.545 | +0.697 | +0.678 |
+| Ozone only | 286.478 | −0.100 | −0.066 |
+| CO₂ only | 286.549 | +0.429 | +0.471 |
+
+The 2005–2014 mean of the raw annual combined-minus-CO₂-only temperature difference was +0.265 K. The corresponding combined-minus-ozone-only difference was +0.864 K. Each difference compares two single trajectories.
+
+![Annual global near-surface air temperature anomalies under three historical forcing combinations](fig1/results/fig1_surface_temperature.png)
+
+Thin curves show all 165 annual values. Thick curves show complete centred nine-year means. [Annual values (CSV)](fig1/results/annual_temperature.csv) · [Statistics (JSON)](fig1/results/summary.json) · [Vector figure (PDF)](fig1/results/fig1_surface_temperature.pdf) · [Independent review](FINAL_REVIEW.md)
 
 ```bash
 make -C src test-data test-ozone test-ozone-mpi
